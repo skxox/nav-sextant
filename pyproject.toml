@@ -1,0 +1,26 @@
+[project]
+name = "nav-sextant"
+version = "0.1.0"
+description = "自用基金多维 Agent 决策系统：净值/因子/消息面分析 + 硬风控 + Web 面板"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "akshare>=1.14",
+    "pandas>=2.0",
+    "openai>=1.30",
+    "pyyaml>=6.0",
+    "requests>=2.31",
+    "apscheduler>=3.10",
+    "pydantic>=2.14.2",
+    "python-multipart>=0.0.32",
+]
+
+[tool.uv]
+# 个人项目：复用项目根目录 .venv
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
