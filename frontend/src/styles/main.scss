@@ -1,0 +1,109 @@
+// 暗色设计系统（SCSS）—— 全站唯一颜色来源，组件一律引用 CSS 变量
+$bg: #0b0e14;          // 页面底色
+$sidebar: #0e1219;     // 侧边栏
+$panel: #131822;       // 卡片
+$panel-2: #1a212e;     // 卡片内嵌块 / hover
+$border: #232b3a;
+$text: #dfe4ee;
+$muted: #8b93a5;
+$accent: #4d7cfe;
+$buy: #f0506e;         // 涨（中国市场红涨）
+$sell: #2fbf71;        // 跌
+$warn: #e0a03c;
+
+:root {
+  --bg: #{$bg};
+  --sidebar: #{$sidebar};
+  --panel: #{$panel};
+  --panel-2: #{$panel-2};
+  --border: #{$border};
+  --text: #{$text};
+  --muted: #{$muted};
+  --accent: #{$accent};
+  --buy: #{$buy};
+  --sell: #{$sell};
+  --warn: #{$warn};
+}
+
+// Element Plus 暗色变量校准
+html.dark {
+  --el-bg-color: #{$panel};
+  --el-bg-color-page: #{$bg};
+  --el-bg-color-overlay: #1c2330;
+  --el-border-color: #{$border};
+  --el-border-color-light: #{$border};
+  --el-border-color-lighter: #1d2534;
+  --el-fill-color-blank: #{$panel};
+  --el-fill-color-light: #{$panel-2};
+  --el-fill-color: #{$panel-2};
+  --el-text-color-primary: #{$text};
+  --el-text-color-regular: #c3cad8;
+  --el-text-color-secondary: #{$muted};
+  --el-color-primary: #{$accent};
+
+  .el-card {
+    --el-card-bg-color: #{$panel};
+    border-color: #{$border};
+  }
+  .el-table {
+    --el-table-bg-color: #{$panel};
+    --el-table-tr-bg-color: #{$panel};
+    --el-table-header-bg-color: #{$panel-2};
+    --el-table-row-hover-bg-color: #{$panel-2};
+    --el-table-border-color: #{$border};
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+// 通用卡片
+.el-card {
+  border-radius: 12px;
+  --el-card-padding: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .25) !important;
+}
+
+.card-title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+
+// 数字涨跌
+.text-pos { color: var(--buy); font-weight: 600; }
+.text-neg { color: var(--sell); font-weight: 600; }
+.text-muted { color: var(--muted); }
+.num-lg { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.chart-box { width: 100%; height: 300px; }
+.chart-box-sm { width: 100%; height: 240px; }
+
+// 统计小卡
+.stat-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  .stat-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .stat-value { font-size: 22px; font-weight: 700; line-height: 1.2; }
+}
+
+// 指数大卡
+.index-card {
+  background: linear-gradient(135deg, var(--panel) 0%, var(--panel-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  .idx-name { font-size: 13px; color: var(--muted); }
+  .idx-close { font-size: 30px; font-weight: 700; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+  .idx-chg { font-size: 13px; font-weight: 600; }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #2a3345; border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
