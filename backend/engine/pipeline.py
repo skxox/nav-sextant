@@ -193,9 +193,15 @@ class Pipeline:
                         f"（{debate.rounds_used} 轮）；"
                         f"{debate.judge_reasoning or debate.unavailable_reason}"),
             "fallback_used": int(bool(debate.unavailable_reason) and debate.unavailable_reason != "debate_disabled"),
-            "detail_json": json.dumps({"bull": debate.bull_points, "bear": debate.bear_points,
-                                       "rounds": debate.rounds, "rounds_used": debate.rounds_used,
-                                       "triggered": debate.triggered}, ensure_ascii=False),
+            "detail_json": json.dumps({
+                "bull": debate.bull_points, "bear": debate.bear_points,
+                "rounds": debate.rounds, "rounds_used": debate.rounds_used,
+                "triggered": debate.triggered, "agree": debate.agree,
+                "final_action": debate.final_action, "confidence": debate.confidence,
+                "judge_reasoning": debate.judge_reasoning,
+                "unavailable_reason": debate.unavailable_reason,
+            }, ensure_ascii=False),
+            "data_quality": 1.0,
         })
         self.db.save_signal({
             "trade_date": trade_date, "fund_code": fund.code, "action": signal.action,
@@ -258,15 +264,71 @@ class Pipeline:
     def _existing_signals(self, trade_date: str) -> list[SignalModel]:
         """已运行过的交易日：从库中重建信号视图（幂等）。"""
         rows = self.db.query("SELECT * FROM signals WHERE trade_date=?", (trade_date,))
-        out: list[SignalModel] = []
-        for r in rows:
-            out.append(SignalModel(
-                trade_date=r["trade_date"], fund_code=r["fund_code"],
-                fund_name=next((f.name for f in self.config.funds if f.code == r["fund_code"]), r["fund_code"]),
-                action=r["action"], target_position=r["target_position"] or 0.0,
-                composite_score=r["composite_score"] or 0.0, risk_passed=True,
-                risk_summary="（历史信号）",
-                risk_checks=[RiskCheckModel(**c) for c in json.loads(r["risk_checks_json"] or "[]")],
-                reasons=json.loads(r["reasons_json"] or "[]"),
-            ))
-        return out
+        names = {f.code: f.name for f in self.config.funds}
+        return rebuild_signal_views(self.db, rows, names)
+
+
+def rebuild_signal_views(db: Database, rows: list, fund_names: dict[str, str] | None = None
+                         ) -> list[SignalModel]:
+    """signals 表行 → 完整 SignalModel（agents/debate 从 agent_logs 联查重建）。
+
+    /api/pipeline/run 幂等路径与 /api/signals/latest 共用：页面刷新后
+    逐轮辩论与 Agent 评分与实时运行结果完全一致，而不是空壳。
+    """
+    fund_names = fund_names or {}
+    out: list[SignalModel] = []
+    for r in rows:
+        code = r["fund_code"]
+        logs = db.query("SELECT * FROM agent_logs WHERE trade_date=? AND fund_code=?",
+                        (r["trade_date"], code))
+        agents: dict[str, AgentOutputModel] = {}
+        debate = DebateResultModel()
+        for log in logs:
+            detail = json.loads(log["detail_json"] or "{}")
+            if log["agent"] == "debate":
+                debate = _rebuild_debate(log, detail)
+            else:
+                agents[log["agent"]] = AgentOutputModel(
+                    agent=log["agent"], score=log["score"] or 0.0,
+                    direction=log["direction"] or "HOLD",
+                    confidence=log["confidence"] if log["confidence"] is not None else 0.5,
+                    summary=log["summary"] or "",
+                    fallback_used=bool(log["fallback_used"]),
+                    data_quality=log["data_quality"] if log["data_quality"] is not None else 1.0,
+                    detail=detail if isinstance(detail, dict) else {},
+                )
+        checks = [RiskCheckModel(**c) for c in json.loads(r["risk_checks_json"] or "[]")]
+        out.append(SignalModel(
+            trade_date=r["trade_date"], fund_code=code,
+            fund_name=fund_names.get(code, code),
+            action=r["action"], target_position=r["target_position"] or 0.0,
+            composite_score=r["composite_score"] or 0.0,
+            risk_passed=all(c.passed for c in checks),
+            risk_summary="（历史信号）",
+            risk_checks=checks,
+            reasons=json.loads(r["reasons_json"] or "[]"),
+            agents=agents, debate=debate,
+        ))
+    return out
+
+
+def _rebuild_debate(log, detail: dict) -> DebateResultModel:
+    """debate 日志行 → DebateResultModel。新版 detail_json 含全量字段；
+    旧版（本改动前写入）从 summary 模板反解。"""
+    summary = log["summary"] or ""
+    if "agree" in detail:  # 新格式：全量字段已入库
+        agree = bool(detail["agree"])
+        judge = detail.get("judge_reasoning", "")
+    else:  # 旧行：summary = "辩论维持/否决信号 → X（N 轮）；{judge}"
+        agree = "否决" not in summary
+        judge = summary.split("）；", 1)[1] if "）；" in summary else ""
+    return DebateResultModel(
+        triggered=bool(detail.get("triggered")),
+        agree=agree,
+        final_action=detail.get("final_action") or log["direction"] or "HOLD",
+        confidence=detail.get("confidence", log["confidence"] if log["confidence"] is not None else 0.5),
+        bull_points=detail.get("bull") or [], bear_points=detail.get("bear") or [],
+        rounds=detail.get("rounds") or [], rounds_used=detail.get("rounds_used") or 0,
+        judge_reasoning=judge,
+        unavailable_reason=detail.get("unavailable_reason", ""),
+    )

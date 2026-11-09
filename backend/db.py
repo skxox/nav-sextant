@@ -140,6 +140,9 @@ class Database:
         for col in ("open", "high", "low", "volume", "pe_percentile", "pb_percentile"):
             if col not in idx_cols:
                 self.conn.execute(f"ALTER TABLE index_daily ADD COLUMN {col} REAL")
+        log_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(agent_logs)").fetchall()}
+        if "data_quality" not in log_cols:
+            self.conn.execute("ALTER TABLE agent_logs ADD COLUMN data_quality REAL")
         self.conn.commit()
 
     # ---- 写入 ----
@@ -212,8 +215,10 @@ class Database:
     def save_agent_log(self, record: dict):
         self.execute(
             """INSERT OR REPLACE INTO agent_logs
-               (trade_date, fund_code, agent, score, direction, confidence, summary, fallback_used, detail_json)
-               VALUES (:trade_date,:fund_code,:agent,:score,:direction,:confidence,:summary,:fallback_used,:detail_json)""",
+               (trade_date, fund_code, agent, score, direction, confidence, summary,
+                fallback_used, detail_json, data_quality)
+               VALUES (:trade_date,:fund_code,:agent,:score,:direction,:confidence,:summary,
+                       :fallback_used,:detail_json,:data_quality)""",
             record,
         )
 

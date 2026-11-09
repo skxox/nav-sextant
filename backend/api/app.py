@@ -123,9 +123,12 @@ def remove_fund(fund_code: str):
 # ---------- 信号 ----------
 @app.get("/api/signals/latest")
 def latest_signals():
+    """各基金最新信号：agents/debate 从 agent_logs 联查重建（与实时流水线结果一致）。"""
+    from ..engine.pipeline import rebuild_signal_views
     rows = db.get_latest_signals()
-    return [dict(r) | {"reasons": json.loads(r["reasons_json"] or "[]"),
-                       "risk_checks": json.loads(r["risk_checks_json"] or "[]")} for r in rows]
+    cfg = get_cfg()
+    names = {f.code: f.name for f in cfg.funds}
+    return [m.model_dump() for m in rebuild_signal_views(db, rows, names)]
 
 
 @app.get("/api/signals/history/{fund_code}")

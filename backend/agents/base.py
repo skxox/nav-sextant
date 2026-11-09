@@ -31,6 +31,7 @@ class AgentOutput:
             "summary": self.summary,
             "fallback_used": int(self.fallback_used),
             "detail_json": json.dumps(self.detail, ensure_ascii=False),
+            "data_quality": self.data_quality,
         }
 
 
