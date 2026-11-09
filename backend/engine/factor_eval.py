@@ -139,6 +139,71 @@ def evaluate_factor(factor_by_date: dict[str, float],
     )
 
 
+# 因子族 → Agent 名（sentiment 无历史因子序列，不参与 IC 调权）
+_FACTOR_TO_AGENT = {
+    "momentum": "technical",
+    "valuation": "valuation",
+    "valuation_proxy": "valuation",
+    "risk_lowvol": "risk",
+}
+
+
+@dataclass
+class ICAdjustment:
+    """单个 Agent 的 IC 调权结论：合成层有效权重 = 配置权重 × mult，贡献分 × sign。"""
+    agent: str
+    mult: float          # 权重乘数（1.0 = 不调整）
+    sign: int            # 1 = 原方向，-1 = 因子显著反向 → 反向使用
+    factor: str
+    rank_ic: float
+    ic_tstat: float
+    verdict: str
+    note: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def ic_weight_adjustments(reports: list[FactorICReport], min_samples: int = 30) -> dict[str, ICAdjustment]:
+    """IC 检验 → 合成层权重调整（保守规则）：
+
+    - 显著反向（|t|≥2 且 IC<0）：因子按反向使用（sign=-1），权重 ×0.7 ——
+      历史上稳定反向也是信息，但 regime 可能切换，降一点权重
+    - 显著有效（|t|≥2 且 IC>0）：权重 ×1.2 奖励
+    - 方向相反但不显著（IC<0）：权重 ×0.5 降权（如白酒短动量反转效应）
+    - 方向正确但不显著 / 样本不足：不动
+    同一 Agent 有多个因子族（估值两路）时取 |t| 最大者。
+    """
+    best: dict[str, tuple[float, FactorICReport]] = {}
+    for r in reports:
+        agent = _FACTOR_TO_AGENT.get(r.factor)
+        if agent is None:
+            continue
+        if r.samples < min_samples:
+            continue
+        if agent not in best or abs(r.ic_tstat) > abs(best[agent][0]):
+            best[agent] = (r.ic_tstat, r)
+
+    out: dict[str, ICAdjustment] = {}
+    for agent, (t, r) in best.items():
+        if abs(t) >= 2.0 and r.rank_ic < 0:
+            adj = ICAdjustment(agent, mult=0.7, sign=-1, factor=r.factor, rank_ic=r.rank_ic,
+                               ic_tstat=t, verdict=r.verdict,
+                               note=f"{r.label} 显著反向（IC={r.rank_ic}，t={t}）→ 反向使用并降权至 ×0.7")
+        elif abs(t) >= 2.0:
+            adj = ICAdjustment(agent, mult=1.2, sign=1, factor=r.factor, rank_ic=r.rank_ic,
+                               ic_tstat=t, verdict=r.verdict,
+                               note=f"{r.label} 显著有效（IC={r.rank_ic}，t={t}）→ 权重 ×1.2")
+        elif r.rank_ic < 0:
+            adj = ICAdjustment(agent, mult=0.5, sign=1, factor=r.factor, rank_ic=r.rank_ic,
+                               ic_tstat=t, verdict=r.verdict,
+                               note=f"{r.label} 方向相反但不显著（IC={r.rank_ic}，t={t}）→ 权重 ×0.5")
+        else:
+            continue  # 方向正确（无论显著与否都不惩罚；显著正向已在上面奖励）
+        out[agent] = adj
+    return out
+
+
 def evaluate_all_factors(nav_history: pd.DataFrame,
                          index_valuation: pd.DataFrame,
                          momentum_windows: tuple = (5, 20, 60),

@@ -155,6 +155,7 @@ class Pipeline:
             fund_code=fund.code, fund_name=fund.name, nav_history=nav_history,
             momentum=momentum, valuation=valuation, news=news,
             index_change_pct=(nav_est.estimated_change_pct if nav_est else None),
+            index_valuation_df=index_val,
         ), nav_history, nav_est
 
     # ---------- 单基金分析 ----------
@@ -162,7 +163,23 @@ class Pipeline:
         ctx, nav_history, nav_est = self._build_context(fund, news)
         outputs = self._run_agents(ctx)
 
-        signal = synthesize(fund.code, fund.name, trade_date, outputs, self.config.settings)
+        # 因子 IC 检验驱动的权重调整（默认关闭；检验复用生产同款因子函数）
+        ic_adjustments: dict[str, dict] = {}
+        if self.config.settings.ic_weighting_enabled:
+            try:
+                from .factor_eval import evaluate_all_factors, ic_weight_adjustments
+                reports = evaluate_all_factors(
+                    nav_history, ctx.get("index_valuation_df"),
+                    tuple(self.config.settings.momentum_windows),
+                    tuple(self.config.settings.momentum_windows_weights),
+                    self.config.settings.valuation_percentile_window)
+                ic_adjustments = {a: adj.to_dict() for a, adj in
+                                  ic_weight_adjustments(reports, self.config.settings.ic_min_samples).items()}
+            except Exception as e:  # noqa: BLE001
+                logger.warning("IC 调权计算失败（%s），本次不调整: %s", fund.code, e)
+
+        signal = synthesize(fund.code, fund.name, trade_date, outputs, self.config.settings,
+                            ic_adjustments=ic_adjustments)
 
         # Bull/Bear 辩论 + 风控审核层（非 HOLD 信号触发）
         if self.llm is not None and self.config.llm.debate_enabled and signal.action != "HOLD":

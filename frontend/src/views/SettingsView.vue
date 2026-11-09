@@ -14,6 +14,7 @@ const strategy = reactive({
   buy: 0.25, sell: -0.25,
   max_pos: 0.3, max_dd: 0.15, cash: 0.1,
   momentum_windows: '5, 20, 60', momentum_weights: '0.2, 0.3, 0.5', val_window: 750,
+  ic_enabled: false, ic_min_samples: 30,
 })
 const debate = reactive({ rounds: 2, consensus_early_stop: true })
 const scheduler = reactive({ enabled: false, run_at: '18:00', weekdays_only: true })
@@ -45,6 +46,8 @@ function fill(b: SettingsBundle): void {
     momentum_windows: b.settings.momentum_windows.join(', '),
     momentum_weights: b.settings.momentum_windows_weights.join(', '),
     val_window: b.settings.valuation_percentile_window,
+    ic_enabled: b.settings.ic_weighting_enabled ?? false,
+    ic_min_samples: b.settings.ic_min_samples ?? 30,
   })
   Object.assign(debate, b.debate)
   Object.assign(scheduler, b.scheduler)
@@ -88,6 +91,8 @@ function strategyPatch(): Record<string, unknown> | null {
     momentum_windows: windows.map((n) => Math.round(n)),
     momentum_windows_weights: weights,
     valuation_percentile_window: Math.round(strategy.val_window),
+    ic_weighting_enabled: strategy.ic_enabled,
+    ic_min_samples: Math.round(strategy.ic_min_samples),
   }
 }
 const saveStrategy = (): Promise<void> => {
@@ -214,6 +219,13 @@ onMounted(load)
           <el-input v-model="strategy.momentum_weights" placeholder="0.2, 0.3, 0.5" /></div>
         <div class="field"><label>估值分位回看窗口（交易日）</label>
           <el-input-number v-model="strategy.val_window" :min="60" :max="2500" :step="30" style="width: 100%" /></div>
+        <div class="field"><label>IC 自适应调权
+          <el-tooltip placement="top" content="用因子 IC 检验修正 Agent 权重：方向相反降权 ×0.5、显著反向( |t|≥2 )反向使用 ×0.7、显著有效 ×1.2。检验结果见「策略回测」页因子检验卡片。">
+            <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">?</el-tag>
+          </el-tooltip></label>
+          <el-switch v-model="strategy.ic_enabled" /></div>
+        <div class="field"><label>IC 检验最小样本数（不足则不调整）</label>
+          <el-input-number v-model="strategy.ic_min_samples" :min="10" :max="500" :step="10" :disabled="!strategy.ic_enabled" style="width: 100%" /></div>
       </div>
       <div class="row-actions">
         <span class="text-muted" style="font-size: 12px">

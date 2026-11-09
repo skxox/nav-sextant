@@ -313,6 +313,8 @@ export interface StrategySettings {
   momentum_windows_weights: number[]
   valuation_percentile_window: number
   risk: { max_single_fund_position: number; max_drawdown: number; cash_buffer: number }
+  ic_weighting_enabled?: boolean
+  ic_min_samples?: number
 }
 
 export interface SchedulerSettings {

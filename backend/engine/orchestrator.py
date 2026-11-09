@@ -41,16 +41,22 @@ def _detect_disagreement(outputs: dict[str, AgentOutput]) -> bool:
 
 
 def synthesize(fund_code: str, fund_name: str, trade_date: str,
-               outputs: dict[str, AgentOutput], settings: Settings) -> CompositeSignal:
+               outputs: dict[str, AgentOutput], settings: Settings,
+               ic_adjustments: dict | None = None) -> CompositeSignal:
+    """ic_adjustments: {agent: ICAdjustment.to_dict()}，因子 IC 检验驱动的权重修正。"""
     weights: dict[str, float] = settings.weights.model_dump()
+    ic_adjustments = ic_adjustments or {}
     num, den = 0.0, 0.0
     for name, out in outputs.items():
         w = weights.get(name, 0.0)
         if w <= 0:
             continue
-        # 三重加权：置信度（0.5 为基准）× 数据质量
-        eff_w = w * max(out.confidence, 0.05) / 0.5 * float(np.clip(out.data_quality, 0.0, 1.0))
-        num += eff_w * out.score
+        # 三重加权：置信度（0.5 为基准）× 数据质量；再乘 IC 调权系数
+        adj = ic_adjustments.get(name)
+        mult = float(adj.get("mult", 1.0)) if adj else 1.0
+        sign = int(adj.get("sign", 1)) if adj else 1
+        eff_w = w * max(out.confidence, 0.05) / 0.5 * float(np.clip(out.data_quality, 0.0, 1.0)) * mult
+        num += eff_w * out.score * sign
         den += eff_w
 
     score = round(num / den, 3) if den > 0 else 0.0
@@ -73,6 +79,9 @@ def synthesize(fund_code: str, fund_name: str, trade_date: str,
     reasons = [f"[{o.agent}] {o.summary}" for o in outputs.values() if o.summary]
     if disagreement:
         reasons.append("[orchestrator] 检测到多空 Agent 强分歧，买入/卖出阈值已临时收紧 1.5 倍")
+    for name, adj in ic_adjustments.items():
+        if adj.get("note"):
+            reasons.append(f"[ic] {adj['note']}")
     return CompositeSignal(
         fund_code=fund_code, fund_name=fund_name, trade_date=trade_date,
         composite_score=score, action=action, target_position=target,
