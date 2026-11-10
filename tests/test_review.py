@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.db import Database
-from backend.engine.review import review_signals
+from backend.engine.review import review_signals, shuffle_test
 
 
 def _db(tmp_path: Path) -> Database:
@@ -204,3 +204,88 @@ def test_t_stat_none_for_few_samples(tmp_path):
     r = review_signals(db, horizons=(1,))
     assert r.decay_curve[0].samples == 2
     assert r.decay_curve[0].t_stat is None
+
+
+# ---------- 打乱对照（shuffle test）----------
+
+def _trend_db(tmp_path, n_blocks: int = 10, up: bool = True) -> tuple[Database, list[str]]:
+    """构造可预测涨跌交替的库：每块 3 天，块内信号日→入场→出场。
+    up=True 时入场后上涨（利好 BUY），False 时下跌。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", n_blocks * 3)
+    tail = 1.05 if up else 0.95
+    _nav("110022", d, [1.0, 1.0, tail] * n_blocks, db)
+    return db, d
+
+
+def test_shuffle_detects_genuine_alpha(tmp_path):
+    """完美前瞻信号（BUY 全部命中 +5%）→ 显著优于随机。"""
+    db, d = _trend_db(tmp_path, n_blocks=12, up=True)
+    for i in range(12):
+        _signal(db, "110022", d[i * 3], "BUY")
+    r = shuffle_test(db, horizons=(1,), n_trials=200)
+    h = r.horizons[0]
+    assert h.samples == 12
+    assert h.real_avg_pct == pytest.approx(5.0)
+    assert h.z_score is not None and h.z_score > 2
+    assert h.p_value <= 0.05
+    assert h.verdict == "显著优于随机"
+    assert "显著优于随机" in r.verdict
+
+
+def test_shuffle_flags_reverse_information(tmp_path):
+    """BUY 全部踩在下跌前 → 显著差于随机（反向信息）。"""
+    db, d = _trend_db(tmp_path, n_blocks=12, up=False)
+    for i in range(12):
+        _signal(db, "110022", d[i * 3], "BUY")
+    r = shuffle_test(db, horizons=(1,), n_trials=200)
+    h = r.horizons[0]
+    assert h.verdict == "显著差于随机"
+
+
+def test_shuffle_no_edge_when_signal_equals_population(tmp_path):
+    """每条净值日都发 BUY → 真实 = 随机的同一总体 → 与随机无异。"""
+    db, d = _trend_db(tmp_path, n_blocks=6, up=True)
+    n_days = len(d)
+    _nav("110022", d, [1.0] * n_days, db)  # 全平净值 → 真实与随机同总体
+    for day in d[:-2]:  # 留出入场与出场空间
+        _signal(db, "110022", day, "BUY")
+    r = shuffle_test(db, horizons=(1,), n_trials=100)
+    h = r.horizons[0]
+    assert h.samples >= 8
+    assert h.verdict in ("与随机无异", "样本不足")  # 全平 → 零方差 → 不显著
+
+
+def test_shuffle_insufficient_samples(tmp_path):
+    db, d = _trend_db(tmp_path, n_blocks=2, up=True)
+    _signal(db, "110022", d[0], "BUY")
+    _signal(db, "110022", d[3], "SELL")
+    r = shuffle_test(db, horizons=(1,), n_trials=50)
+    assert r.horizons[0].verdict == "样本不足"
+    assert "样本不足" in r.verdict
+
+
+def test_shuffle_deterministic_with_seed(tmp_path):
+    """同 seed 同结果（决策可复现原则）。"""
+    db, d = _trend_db(tmp_path, n_blocks=10, up=True)
+    for i in range(10):
+        _signal(db, "110022", d[i * 3], "BUY" if i % 2 == 0 else "SELL")
+    r1 = shuffle_test(db, horizons=(1,), n_trials=100, seed=7)
+    r2 = shuffle_test(db, horizons=(1,), n_trials=100, seed=7)
+    assert r1.to_dict() == r2.to_dict()
+
+
+def test_shuffle_multi_fund_pools_independently(tmp_path):
+    """两基金方向相反的行情：合并统计仍应识别真实信息，不因跨基金混淆崩溃。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 36)
+    _nav("110022", d, [1.0, 1.0, 1.05] * 12, db)   # 消费：入场后涨
+    _nav("161725", d, [1.0, 1.0, 0.95] * 12, db)   # 白酒：入场后跌
+    for i in range(12):
+        _signal(db, "110022", d[i * 3], "BUY")
+        _signal(db, "161725", d[i * 3], "SELL")
+    r = shuffle_test(db, horizons=(1,), n_trials=200)
+    h = r.horizons[0]
+    assert h.samples == 24
+    assert h.real_avg_pct == pytest.approx(5.0)  # 双双命中
+    assert h.verdict == "显著优于随机"

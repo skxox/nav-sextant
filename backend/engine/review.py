@@ -117,27 +117,8 @@ def _verdict(curve: list[HorizonStat], best: int | None) -> str:
     return "信号暂无信息量：各期方向化收益均 ≤ 0，考虑关闭或重校准"
 
 
-def review_signals(db: Database,
-                   fund_code: str | None = None,
-                   horizons: tuple[int, ...] = DEFAULT_HORIZONS,
-                   detail_limit: int = 200,
-                   fund_names: dict[str, str] | None = None) -> SignalReviewReport:
-    """复盘全部（或单只基金）历史信号。
-
-    - fund_code: None = 全部基金合并统计
-    - details 只保留最近 detail_limit 条已评估信号（API 载荷控制）
-    """
-    horizons = tuple(sorted(set(h for h in horizons if h >= 1)))
-    names = fund_names or {}
-
-    where, params = "", ()
-    if fund_code:
-        where = " WHERE fund_code=?"
-        params = (fund_code,)
-    signal_rows = db.query(
-        f"SELECT trade_date, fund_code, action, composite_score FROM signals{where} ORDER BY trade_date",
-        params)
-
+def _load_navs(db: Database, fund_code: str | None = None) -> dict[str, list[tuple[str, float]]]:
+    """各基金净值序列（按日期升序，已剔 NULL）。"""
     nav_by_fund: dict[str, list[tuple[str, float]]] = {}
     nav_where, nav_params = "", ()
     if fund_code:
@@ -147,6 +128,24 @@ def review_signals(db: Database,
             f"SELECT fund_code, trade_date, nav FROM fund_nav WHERE nav IS NOT NULL{nav_where} ORDER BY trade_date",
             nav_params):
         nav_by_fund.setdefault(r["fund_code"], []).append((r["trade_date"], float(r["nav"])))
+    return nav_by_fund
+
+
+def _evaluate(db: Database, fund_code: str | None,
+              horizons: tuple[int, ...]) -> tuple[list[EvaluatedSignal], dict[str, list[tuple[str, float]]],
+                                                   int, int, int]:
+    """加载信号并按复盘口径评估前向收益。
+
+    返回 (已评估信号, 各基金净值序列, 总信号数, BUY/SELL 数, pending 数)。
+    """
+    where, params = "", ()
+    if fund_code:
+        where = " WHERE fund_code=?"
+        params = (fund_code,)
+    signal_rows = db.query(
+        f"SELECT trade_date, fund_code, action, composite_score FROM signals{where} ORDER BY trade_date",
+        params)
+    nav_by_fund = _load_navs(db, fund_code)
 
     evaluated_signals: list[EvaluatedSignal] = []
     total = actionable = pending = 0
@@ -174,6 +173,23 @@ def review_signals(db: Database,
             else:
                 ev.returns_pct[n] = None  # 该 horizon 前向净值未到 → pending
         evaluated_signals.append(ev)
+    return evaluated_signals, nav_by_fund, total, actionable, pending
+
+
+def review_signals(db: Database,
+                   fund_code: str | None = None,
+                   horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+                   detail_limit: int = 200,
+                   fund_names: dict[str, str] | None = None) -> SignalReviewReport:
+    """复盘全部（或单只基金）历史信号。
+
+    - fund_code: None = 全部基金合并统计
+    - details 只保留最近 detail_limit 条已评估信号（API 载荷控制）
+    """
+    horizons = tuple(sorted(set(h for h in horizons if h >= 1)))
+    names = fund_names or {}
+
+    evaluated_signals, _navs, total, actionable, pending = _evaluate(db, fund_code, horizons)
 
     # ---- 聚合：全体 / 分 action / 分基金 ----
     def _curve(sigs: list[EvaluatedSignal]) -> list[HorizonStat]:
@@ -227,3 +243,118 @@ def review_signals(db: Database,
         verdict=_verdict(decay_curve, best),
         details=list(reversed(evaluated_signals))[:detail_limit],
     )
+
+
+# ---------- 信号打乱对照（shuffle test）----------
+# 最狠也最诚实的自检：若真实信号的方向化收益与「随机挑日期、同样方向组合」
+# 的对照无显著差异 → 系统不含择时信息。思想源自 llm-quant 的 fraud detector。
+
+@dataclass
+class ShuffleHorizonResult:
+    horizon: int
+    samples: int                # 参与打乱的有效信号数
+    real_avg_pct: float | None  # 真实信号方向化平均收益 %
+    null_mean_pct: float | None # 随机对照均值 %
+    null_std_pct: float | None
+    z_score: float | None       # (真实 - 随机均值) / 随机标准差
+    p_value: float | None       # 单侧 P(随机对照 ≥ 真实)，越小越显著
+    verdict: str
+
+    def to_dict(self) -> dict:
+        return {
+            "horizon": self.horizon, "samples": self.samples,
+            "real_avg_pct": _r2(self.real_avg_pct), "null_mean_pct": _r2(self.null_mean_pct),
+            "null_std_pct": _r2(self.null_std_pct),
+            "z_score": _r2(self.z_score),
+            "p_value": round(self.p_value, 4) if self.p_value is not None else None,
+            "verdict": self.verdict,
+        }
+
+
+def _r2(v: float | None) -> float | None:
+    return round(v, 2) if v is not None else None
+
+
+@dataclass
+class ShuffleTestReport:
+    n_trials: int
+    seed: int
+    horizons: list[ShuffleHorizonResult]
+    verdict: str                 # 总结论
+
+    def to_dict(self) -> dict:
+        return {
+            "n_trials": self.n_trials, "seed": self.seed,
+            "horizons": [h.to_dict() for h in self.horizons],
+            "verdict": self.verdict,
+        }
+
+
+def shuffle_test(db: Database,
+                 fund_code: str | None = None,
+                 horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+                 n_trials: int = 300,
+                 seed: int = 42) -> ShuffleTestReport:
+    """打乱对照检验：真实信号 vs 随机择时对照。
+
+    对照构造（保持与真实信号同分布的可比性）：
+    - 方向组合不变（BUY/SELL 条数与真实一致）
+    - 每条信号在其所属基金的净值序列上随机抽一个合法入场日
+      （entry ∈ [1, len-N-1]，与真实信号同款 T+1 入场约束）
+    - 每次打乱计算全体方向化平均收益 → 零分布
+    - p = P(随机 ≥ 真实)（单侧：我们只关心「是否比随机强」）
+
+    多 horizon 同时检验存在多重比较膨胀，结论作探索性诊断用。
+    固定 seed 保证同数据同结果（可复现）。
+    """
+    horizons = tuple(sorted(set(h for h in horizons if h >= 1)))
+    evaluated_signals, nav_by_fund, *_ = _evaluate(db, fund_code, horizons)
+
+    results: list[ShuffleHorizonResult] = []
+    for n in horizons:
+        sigs = [ev for ev in evaluated_signals if ev.returns_pct.get(n) is not None]
+        if len(sigs) < MIN_SAMPLES:
+            results.append(ShuffleHorizonResult(n, len(sigs), None, None, None, None, None, "样本不足"))
+            continue
+
+        real_avg = float(np.mean([ev.returns_pct[n] for ev in sigs]))
+
+        # ---- 零分布：n_trials 次随机重排入场日（分基金抽，向量化）----
+        rng = np.random.default_rng(seed + n)
+        trial_sum = np.zeros(n_trials)
+        funds = sorted({ev.fund_code for ev in sigs})
+        for f in funds:
+            group = [ev for ev in sigs if ev.fund_code == f]
+            navs = nav_by_fund[f]
+            # 该基金在 horizon n 下所有合法入场日的 N 日收益池
+            ret_pool = np.array([navs[i + n][1] / navs[i][1] - 1
+                                 for i in range(1, len(navs) - n)])
+            signs = np.array([1.0 if ev.action == "BUY" else -1.0 for ev in group])
+            idx = rng.integers(0, len(ret_pool), size=(n_trials, len(group)))
+            trial_sum += (ret_pool[idx] * signs).sum(axis=1)
+        trial_means = trial_sum / len(sigs) * 100
+
+        null_mean = float(trial_means.mean())
+        null_std = float(trial_means.std(ddof=1)) if n_trials > 1 else 0.0
+        p = float((trial_means >= real_avg).mean())
+        z = (real_avg - null_mean) / null_std if null_std > 1e-12 else None
+
+        if p <= 0.05 and (z or 0) > 0:
+            v = "显著优于随机"
+        elif p >= 0.95 and (z or 0) < 0:
+            v = "显著差于随机"
+        else:
+            v = "与随机无异"
+        results.append(ShuffleHorizonResult(n, len(sigs), real_avg, null_mean, null_std,
+                                            z, p, v))
+
+    winners = [h for h in results if h.verdict == "显著优于随机"]
+    if winners:
+        verdict = (f"打乱对照：{len(winners)}/{len(results)} 个持有期显著优于随机"
+                   f"（{('、'.join(str(h.horizon) + ' 日' for h in winners))}）——信号含择时信息")
+    elif any(h.samples >= MIN_SAMPLES for h in results):
+        verdict = "打乱对照：与随机无显著差异——信号不含择时信息，警惕系统无信息量"
+    else:
+        verdict = f"样本不足（有效评估需 ≥{MIN_SAMPLES} 条，积累信号后重试）"
+
+    return ShuffleTestReport(n_trials=n_trials, seed=seed, horizons=results, verdict=verdict)

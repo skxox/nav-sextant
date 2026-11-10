@@ -157,6 +157,17 @@ def review_signals(fund_code: str | None = None):
     return run_review(db, fund_code, fund_names=names).to_dict()
 
 
+@app.get("/api/review/shuffle")
+def review_shuffle(fund_code: str | None = None, n_trials: int = 300, seed: int = 42):
+    """信号打乱对照：真实信号 vs 随机择时对照（同一方向组合、随机入场日）。
+
+    p = P(随机对照 ≥ 真实)，p ≤ 0.05 判显著优于随机——否则系统不含择时信息。
+    """
+    from ..engine.review import shuffle_test
+    n_trials = min(max(n_trials, 50), 2000)
+    return shuffle_test(db, fund_code, n_trials=n_trials, seed=seed).to_dict()
+
+
 # ---------- 行情与持仓 ----------
 @app.get("/api/nav/{fund_code}")
 def nav_history(fund_code: str, limit: int = 250):

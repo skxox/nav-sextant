@@ -277,6 +277,26 @@ export interface SignalReviewReport {
   details: ReviewDetailItem[]
 }
 
+// ---------- 打乱对照（shuffle test）----------
+
+export interface ShuffleHorizonResult {
+  horizon: number
+  samples: number
+  real_avg_pct: number | null
+  null_mean_pct: number | null
+  null_std_pct: number | null
+  z_score: number | null
+  p_value: number | null
+  verdict: string
+}
+
+export interface ShuffleTestReport {
+  n_trials: number
+  seed: number
+  horizons: ShuffleHorizonResult[]
+  verdict: string
+}
+
 export interface BacktestMetrics {
   fund_code: FundCode
   fund_name: string

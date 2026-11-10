@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/client'
-import type { FundInfo, SignalReviewReport, ReviewHorizonStat } from '@/api/types'
+import type { FundInfo, SignalReviewReport, ReviewHorizonStat, ShuffleTestReport } from '@/api/types'
 import { useChart } from '@/composables/useChart'
 import { ACCENT, UP_COLOR, DOWN_COLOR, axisLabelStyle, axisLineStyle, splitLineStyle } from '@/utils/chartTheme'
 import type { EChartsOption } from 'echarts'
@@ -130,6 +130,25 @@ function fmtRate(v: number | null | undefined): string {
 // ---- 明细表 ----
 const detailRows = computed(() => (report.value?.details ?? []).slice(0, 100))
 const fundNameMap = computed(() => Object.fromEntries(funds.value.map((f) => [f.code, f.name])))
+
+// ---- 打乱对照 ----
+const shuffle = ref<ShuffleTestReport | null>(null)
+const shuffling = ref(false)
+
+async function runShuffle(): Promise<void> {
+  shuffling.value = true
+  try {
+    shuffle.value = await api.shuffleTest(fundCode.value || undefined)
+  } finally {
+    shuffling.value = false
+  }
+}
+
+watch(fundCode, () => { shuffle.value = null })
+
+function shuffleTagType(v: string): 'success' | 'danger' | 'info' {
+  return v === '显著优于随机' ? 'success' : v === '显著差于随机' ? 'danger' : 'info'
+}
 </script>
 
 <template>
@@ -233,6 +252,67 @@ const fundNameMap = computed(() => Object.fromEntries(funds.value.map((f) => [f.
             </template>
           </el-table-column>
         </el-table>
+      </el-card>
+
+      <!-- 打乱对照 -->
+      <el-card shadow="never" class="mb">
+        <template #header>
+          <div class="card-title">
+            打乱对照（shuffle test）
+            <el-button size="small" type="primary" plain :loading="shuffling" @click="runShuffle">
+              {{ shuffle ? '重新检验' : '运行检验' }}
+            </el-button>
+          </div>
+        </template>
+        <div v-if="!shuffle" class="hint">
+          最狠也最诚实的自检：保持方向组合不变、把入场日随机打乱 N 次构造对照分布。
+          若真实信号收益与随机对照无显著差异（p &gt; 0.05）→ 系统不含择时信息。
+        </div>
+        <template v-else>
+          <div class="verdict" :class="{ good: shuffle.verdict.includes('显著优于随机') }">{{ shuffle.verdict }}</div>
+          <el-table :data="shuffle.horizons" size="small" stripe>
+            <el-table-column label="持有期" width="80" align="center">
+              <template #default="{ row }">{{ row.horizon }} 日</template>
+            </el-table-column>
+            <el-table-column label="真实信号" width="100" align="center">
+              <template #default="{ row }">
+                <span v-if="row.real_avg_pct !== null" :class="row.real_avg_pct >= 0 ? 'text-pos' : 'text-neg'">
+                  {{ fmtPct(row.real_avg_pct) }}
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="随机对照" width="130" align="center">
+              <template #default="{ row }">
+                <span v-if="row.null_mean_pct !== null">
+                  {{ fmtPct(row.null_mean_pct) }} ±{{ (row.null_std_pct ?? 0).toFixed(2) }}
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="z_score" label="z 值" width="80" align="center">
+              <template #default="{ row }">
+                <span v-if="row.z_score !== null" :class="row.z_score >= 0 ? 'text-pos' : 'text-neg'">
+                  {{ row.z_score.toFixed(2) }}
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column prop="p_value" label="p 值" width="80" align="center">
+              <template #default="{ row }">
+                <span v-if="row.p_value !== null">{{ row.p_value.toFixed(3) }}</span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="结论" min-width="140">
+              <template #default="{ row }">
+                <el-tag :type="shuffleTagType(row.verdict)" size="small" effect="plain">{{ row.verdict }}</el-tag>
+                <span class="sub">n={{ row.samples }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div class="hint">p = P(随机对照 ≥ 真实)，单侧；多持有期同时检验存在多重比较膨胀，结论作探索性诊断。</div>
+        </template>
       </el-card>
 
       <!-- 信号明细 -->
