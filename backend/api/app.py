@@ -143,6 +143,45 @@ def agent_logs(trade_date: str | None = None):
     return [dict(r) for r in db.get_agent_logs(trade_date)]
 
 
+# ---------- 执行记录（决策日志）----------
+@app.get("/api/executions")
+def list_executions(fund_code: str | None = None, limit: int = 100):
+    """执行记录列表 + 决策执行统计。净值按执行日回查官方净值，未发布为待确认。"""
+    from ..engine.executions import execution_stats, list_executions as _list
+    cfg = get_cfg()
+    return {"rows": _list(db, fund_code, limit=limit,
+                          fund_names={f.code: f.name for f in cfg.funds}),
+            "stats": execution_stats(db)}
+
+
+class ExecutionCreate(BaseModel):
+    fund_code: str
+    exec_date: str
+    action: str                       # BUY / SELL / SKIP
+    signal_date: str | None = None    # 关联信号；空 = 非信号驱动的人工操作
+    amount: float | None = None       # 金额（元）
+    note: str = ""
+
+
+@app.post("/api/executions")
+def create_execution(body: ExecutionCreate):
+    from ..engine.executions import ExecutionError, record_execution
+    try:
+        return record_execution(db, body.fund_code, body.exec_date, body.action,
+                                signal_date=body.signal_date, amount=body.amount,
+                                note=body.note)
+    except ExecutionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/executions/{exec_id}")
+def delete_execution(exec_id: int):
+    cur = db.execute("DELETE FROM executions WHERE id=?", (exec_id,))
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    return {"ok": True}
+
+
 # ---------- 信号复盘 ----------
 @app.get("/api/review/signals")
 def review_signals(fund_code: str | None = None):

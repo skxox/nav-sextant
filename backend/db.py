@@ -79,6 +79,21 @@ CREATE TABLE IF NOT EXISTS fund_position (
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
+-- 信号执行记录（决策日志）：人对每条可执行信号的处置（执行/跳过）与成交要素。
+-- signal_date 为 NULL = 非信号驱动的人工操作；UNIQUE 中 NULL 互不冲突，可多条。
+CREATE TABLE IF NOT EXISTS executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fund_code TEXT NOT NULL,
+    signal_date TEXT,
+    exec_date TEXT NOT NULL,
+    action TEXT NOT NULL,             -- BUY / SELL / SKIP（决定不执行）
+    amount REAL,                      -- 金额（元）
+    nav REAL,                         -- 成交净值（人工确认时填；缺省按 exec_date 回查 fund_nav）
+    note TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now', 'localtime')),
+    UNIQUE(fund_code, signal_date)    -- 每条信号最多一条处置记录（可改写）；人工操作不受限
+);
+
 CREATE TABLE IF NOT EXISTS agent_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trade_date TEXT NOT NULL,

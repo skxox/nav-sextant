@@ -28,6 +28,9 @@ import type {
   AgentScorecard,
   FundCode,
   TradeDate,
+  ExecutionsResponse,
+  ExecutionRecord,
+  ExecutionCreateBody,
 } from './types'
 
 const http = axios.create({ baseURL: '/api', timeout: 300_000 })
@@ -142,5 +145,16 @@ export const api = {
     return (await http.get<AgentScorecard>('/review/agents', {
       params: code ? { fund_code: code } : {},
     })).data
+  },
+  async listExecutions(code?: FundCode, limit = 100): Promise<ExecutionsResponse> {
+    return (await http.get<ExecutionsResponse>('/executions', {
+      params: { ...(code ? { fund_code: code } : {}), limit },
+    })).data
+  },
+  async recordExecution(body: ExecutionCreateBody): Promise<ExecutionRecord> {
+    return (await http.post<ExecutionRecord>('/executions', body)).data
+  },
+  async deleteExecution(id: number): Promise<void> {
+    await http.delete(`/executions/${id}`)
   },
 }

@@ -237,6 +237,52 @@ export interface FactorEvalResult {
   reports: FactorICReport[]
 }
 
+// ---------- 执行记录（决策日志）----------
+
+export type ExecAction = 'BUY' | 'SELL' | 'SKIP'
+export type ExecStatus = 'confirmed' | 'pending' | 'skipped'
+
+export interface ExecutionRecord {
+  id: number
+  fund_code: FundCode
+  fund_name: string
+  signal_date: TradeDate | null
+  exec_date: TradeDate
+  action: ExecAction
+  amount: number | null
+  nav: number | null
+  nav_source: 'manual' | 'nav' | null
+  shares: number | null
+  status: ExecStatus
+  note: string
+  signal_action: SignalAction | null
+  signal_target: number | null
+  signal_score: number | null
+  created_at: string
+}
+
+export interface ExecutionStats {
+  actionable: number
+  executed: number
+  skipped: number
+  unhandled: number
+  exec_rate: number | null
+}
+
+export interface ExecutionsResponse {
+  rows: ExecutionRecord[]
+  stats: ExecutionStats
+}
+
+export interface ExecutionCreateBody {
+  fund_code: FundCode
+  exec_date: TradeDate
+  action: ExecAction
+  signal_date?: TradeDate
+  amount?: number
+  note?: string
+}
+
 // ---------- 信号复盘 ----------
 
 export interface ReviewHorizonStat {

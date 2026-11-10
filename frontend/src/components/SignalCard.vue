@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { usePanelStore, AGENT_LABELS } from '@/stores/panel'
-import type { AgentName, SignalAction, DebateResult } from '@/api/types'
+import type { AgentName, SignalAction, DebateResult, ExecutionRecord } from '@/api/types'
 
-const props = defineProps<{ signal: { fund_code: string; fund_name: string; action: SignalAction; composite_score: number; target_position: number; risk_passed: boolean; reasons: string[]; agents: Record<AgentName, { score: number; confidence: number; fallback_used: boolean; data_quality?: number; summary: string }>; risk_checks: { name: string; passed: boolean; detail: string }[]; debate?: DebateResult }, active: boolean }>()
-const emit = defineEmits<{ select: [code: string] }>()
+const props = defineProps<{ signal: { trade_date: string; fund_code: string; fund_name: string; action: SignalAction; composite_score: number; target_position: number; risk_passed: boolean; reasons: string[]; agents: Record<AgentName, { score: number; confidence: number; fallback_used: boolean; data_quality?: number; summary: string }>; risk_checks: { name: string; passed: boolean; detail: string }[]; debate?: DebateResult }, active: boolean, exec?: ExecutionRecord | null }>()
+const emit = defineEmits<{ select: [code: string]; record: [code: string, mode: 'exec' | 'skip'] }>()
 
 const store = usePanelStore()
 const expanded = computed(() => props.signal.fund_code === store.selectedFund)
 const scoreClass = computed(() => (props.signal.composite_score >= 0 ? 'text-pos' : 'text-neg'))
+const actionable = computed(() => props.signal.action !== 'HOLD')
 </script>
 
 <template>
@@ -36,6 +37,25 @@ const scoreClass = computed(() => (props.signal.composite_score >= 0 ? 'text-pos
           <template v-else-if="(a.data_quality ?? 1) < 0.6">（数据不足）</template>
         </span>
       </el-tooltip>
+    </div>
+    <div v-if="actionable" class="exec-row" @click.stop>
+      <template v-if="exec">
+        <el-tag size="small" :type="exec.action === 'SKIP' ? 'info' : 'success'">
+          {{ exec.action === 'SKIP' ? '已跳过' : exec.status === 'confirmed' ? '已执行' : '已执行·净值待确认' }}
+        </el-tag>
+        <span class="exec-detail text-muted">
+          {{ exec.exec_date }}
+          <template v-if="exec.amount"> · ¥{{ exec.amount.toLocaleString() }}</template>
+          <template v-if="exec.note"> · {{ exec.note }}</template>
+        </span>
+        <el-button link type="primary" size="small"
+                   @click="emit('record', signal.fund_code, exec.action === 'SKIP' ? 'skip' : 'exec')">修改</el-button>
+      </template>
+      <template v-else>
+        <span class="text-muted exec-detail">信号待处理</span>
+        <el-button size="small" @click="emit('record', signal.fund_code, 'exec')">记录执行</el-button>
+        <el-button size="small" text @click="emit('record', signal.fund_code, 'skip')">跳过</el-button>
+      </template>
     </div>
     <el-collapse-transition>
       <div v-if="expanded" class="detail">
@@ -74,6 +94,8 @@ const scoreClass = computed(() => (props.signal.composite_score >= 0 ? 'text-pos
 .chip { font-size: 11px; padding: 3px 8px; border-radius: 5px; background: var(--panel-2); color: var(--text); cursor: default; border: 1px solid var(--border); }
 .chip.fallback { opacity: .55; }
 .chip .conf { font-style: normal; color: var(--muted); font-size: 10px; margin-left: 2px; }
+.exec-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.exec-detail { font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .detail { margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; font-size: 12px; color: var(--muted); line-height: 1.8; }
 .debate { margin-top: 6px; border-top: 1px dashed var(--border); padding-top: 6px; }
 .round { margin-top: 6px; padding-left: 8px; border-left: 2px solid var(--border); }
