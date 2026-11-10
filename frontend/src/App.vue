@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   DataLine, DataAnalysis, Coin, TrendCharts, Clock, Document,
-  Upload, Setting, Fold, Expand, VideoPlay, Compass,
+  Upload, Setting, Fold, Expand, VideoPlay, Compass, Aim,
 } from '@element-plus/icons-vue'
 import { usePanelStore } from '@/stores/panel'
 
@@ -18,6 +18,7 @@ const navs = [
   { path: '/signals', label: '每日信号', icon: DataAnalysis },
   { path: '/holdings', label: '持仓管理', icon: Coin },
   { path: '/history', label: '信号历史', icon: Clock },
+  { path: '/review', label: '信号复盘', icon: Aim },
   { path: '/backtest', label: '策略回测', icon: TrendCharts },
   { path: '/logs', label: 'Agent 日志', icon: Document },
   { path: '/import', label: '数据导入', icon: Upload },

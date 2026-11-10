@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/signals', name: 'signals', component: () => import('@/views/SignalsView.vue') },
     { path: '/holdings', name: 'holdings', component: () => import('@/views/HoldingsView.vue') },
     { path: '/history', name: 'history', component: () => import('@/views/HistoryView.vue') },
+    { path: '/review', name: 'review', component: () => import('@/views/ReviewView.vue') },
     { path: '/backtest', name: 'backtest', component: () => import('@/views/BacktestView.vue') },
     { path: '/logs', name: 'logs', component: () => import('@/views/LogsView.vue') },
     { path: '/import', name: 'import', component: () => import('@/views/ImportView.vue') },

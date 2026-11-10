@@ -23,6 +23,7 @@ import type {
   SettingsSection,
   Signal,
   SignalHistoryItem,
+  SignalReviewReport,
   FundCode,
   TradeDate,
 } from './types'
@@ -126,5 +127,8 @@ export const api = {
   },
   async factorsEval(code: FundCode, forwardDays = 5): Promise<FactorEvalResult> {
     return (await http.get<FactorEvalResult>(`/factors/eval/${code}`, { params: { forward_days: forwardDays } })).data
+  },
+  async signalReview(code?: FundCode): Promise<SignalReviewReport> {
+    return (await http.get<SignalReviewReport>('/review/signals', { params: code ? { fund_code: code } : {} })).data
   },
 }

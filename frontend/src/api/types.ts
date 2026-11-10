@@ -237,6 +237,46 @@ export interface FactorEvalResult {
   reports: FactorICReport[]
 }
 
+// ---------- 信号复盘 ----------
+
+export interface ReviewHorizonStat {
+  horizon: number
+  samples: number
+  win_rate: number | null
+  avg_return_pct: number | null
+  t_stat: number | null
+}
+
+export interface ReviewFundStat {
+  fund_code: FundCode
+  fund_name: string
+  evaluated: number
+  horizons: ReviewHorizonStat[]
+}
+
+export interface ReviewDetailItem {
+  trade_date: TradeDate
+  fund_code: FundCode
+  action: 'BUY' | 'SELL'
+  composite_score: number | null
+  entry_date: TradeDate | null
+  returns_pct: Record<string, number | null>
+}
+
+export interface SignalReviewReport {
+  horizons: number[]
+  total_signals: number
+  actionable: number
+  evaluated: number
+  pending: number
+  decay_curve: ReviewHorizonStat[]
+  by_action: Record<string, ReviewHorizonStat[]>
+  by_fund: ReviewFundStat[]
+  best_horizon: number | null
+  verdict: string
+  details: ReviewDetailItem[]
+}
+
 export interface BacktestMetrics {
   fund_code: FundCode
   fund_name: string

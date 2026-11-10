@@ -143,6 +143,20 @@ def agent_logs(trade_date: str | None = None):
     return [dict(r) for r in db.get_agent_logs(trade_date)]
 
 
+# ---------- 信号复盘 ----------
+@app.get("/api/review/signals")
+def review_signals(fund_code: str | None = None):
+    """信号复盘：历史 BUY/SELL 的事后 N 日收益验证 + 信号衰减曲线。
+
+    口径：T 日信号 → T+1 净值入场 → N 日方向化收益（BUY 正 / SELL 负），
+    峰值 N 即信号有效期。fund_code 为空则全部基金合并统计。
+    """
+    from ..engine.review import review_signals as run_review
+    cfg = get_cfg()
+    names = {f.code: f.name for f in cfg.funds}
+    return run_review(db, fund_code, fund_names=names).to_dict()
+
+
 # ---------- 行情与持仓 ----------
 @app.get("/api/nav/{fund_code}")
 def nav_history(fund_code: str, limit: int = 250):
