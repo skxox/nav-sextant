@@ -396,6 +396,7 @@ export interface StrategySettings {
   risk: { max_single_fund_position: number; max_drawdown: number; cash_buffer: number }
   ic_weighting_enabled?: boolean
   ic_min_samples?: number
+  whipsaw_cooldown_days?: number
 }
 
 export interface SchedulerSettings {

@@ -78,6 +78,8 @@ class Settings(BaseModel):
                                        description="按因子 IC 检验结果自动调整 Agent 权重（方向相反降权/显著反向取反）")
     ic_min_samples: int = Field(default=30, ge=10, le=500,
                                 description="IC 检验最小样本数，不足则不调整")
+    whipsaw_cooldown_days: int = Field(default=3, ge=0, le=30,
+                                       description="反向信号冷却期（交易日）：N 日内反向信号压制为 HOLD 并维持原仓位，0 = 关闭")
 
     # 兼容旧字段的便捷属性（engine 层使用）
     @property

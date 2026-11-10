@@ -36,6 +36,7 @@ from .debate import run_debate
 from .orchestrator import synthesize
 from .portfolio import portfolio_drawdown
 from .risk_control import check
+from .whipsaw import whipsaw_guard
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,11 @@ class Pipeline:
         risk_result = check(signal, self.config.settings, current_position, portfolio_dd)
         if not risk_result.passed:
             signal.target_position = 0.0
+
+        # 抖动抑制（末端整形）：冷却期内反向信号压制为 HOLD 并维持原仓位
+        signal.action, signal.target_position, signal.reasons = whipsaw_guard(
+            self.db, trade_date, fund.code, signal.action, signal.target_position,
+            signal.reasons, self.config.settings.whipsaw_cooldown_days)
 
         # 入库
         for out in outputs.values():
