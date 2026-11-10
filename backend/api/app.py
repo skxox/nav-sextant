@@ -168,6 +168,17 @@ def review_shuffle(fund_code: str | None = None, n_trials: int = 300, seed: int 
     return shuffle_test(db, fund_code, n_trials=n_trials, seed=seed).to_dict()
 
 
+@app.get("/api/review/agents")
+def review_agents(fund_code: str | None = None, horizon: int | None = None):
+    """分 Agent 记分卡：四路 Agent 各自的方向命中率与方向化收益。
+
+    horizon 缺省自动取信号复盘的有效期；合成信号作为基准行参与对比。
+    """
+    from ..engine.review import agent_scorecard
+    horizon = min(max(horizon, 1), 60) if horizon is not None else None
+    return agent_scorecard(db, fund_code, horizon=horizon).to_dict()
+
+
 # ---------- 行情与持仓 ----------
 @app.get("/api/nav/{fund_code}")
 def nav_history(fund_code: str, limit: int = 250):

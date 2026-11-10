@@ -25,6 +25,7 @@ import type {
   SignalHistoryItem,
   SignalReviewReport,
   ShuffleTestReport,
+  AgentScorecard,
   FundCode,
   TradeDate,
 } from './types'
@@ -135,6 +136,11 @@ export const api = {
   async shuffleTest(code?: FundCode, nTrials = 300): Promise<ShuffleTestReport> {
     return (await http.get<ShuffleTestReport>('/review/shuffle', {
       params: { ...(code ? { fund_code: code } : {}), n_trials: nTrials },
+    })).data
+  },
+  async agentScorecard(code?: FundCode): Promise<AgentScorecard> {
+    return (await http.get<AgentScorecard>('/review/agents', {
+      params: code ? { fund_code: code } : {},
     })).data
   },
 }

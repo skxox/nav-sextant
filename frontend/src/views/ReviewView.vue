@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/client'
-import type { FundInfo, SignalReviewReport, ReviewHorizonStat, ShuffleTestReport } from '@/api/types'
+import type { FundInfo, SignalReviewReport, ReviewHorizonStat, ShuffleTestReport, AgentScorecard, AgentStat } from '@/api/types'
 import { useChart } from '@/composables/useChart'
 import { ACCENT, UP_COLOR, DOWN_COLOR, axisLabelStyle, axisLineStyle, splitLineStyle } from '@/utils/chartTheme'
 import type { EChartsOption } from 'echarts'
@@ -93,6 +93,7 @@ async function load(): Promise<void> {
     const r = await api.signalReview(fundCode.value || undefined)
     report.value = r
     applyChart(r)
+    void loadScorecard()
   } finally {
     loading.value = false
   }
@@ -148,6 +149,33 @@ watch(fundCode, () => { shuffle.value = null })
 
 function shuffleTagType(v: string): 'success' | 'danger' | 'info' {
   return v === '显著优于随机' ? 'success' : v === '显著差于随机' ? 'danger' : 'info'
+}
+
+// ---- 分 Agent 记分卡 ----
+const scorecard = ref<AgentScorecard | null>(null)
+
+async function loadScorecard(): Promise<void> {
+  try {
+    scorecard.value = await api.agentScorecard(fundCode.value || undefined)
+  } catch { /* 记分卡失败不阻塞复盘主体 */ }
+}
+
+function scorecardTagType(v: string): 'success' | 'danger' | 'warning' | 'info' {
+  if (v === '显著正向') return 'success'
+  if (v.includes('反向')) return 'danger'
+  if (v === '方向正确不显著') return 'warning'
+  return 'info'
+}
+
+const scorecardRows = computed<(AgentStat & { isComposite?: boolean })[]>(() => {
+  const sc = scorecard.value
+  if (!sc) return []
+  const rows = sc.agents.filter((a) => a.samples > 0)
+  return sc.composite ? [...rows, { ...sc.composite, isComposite: true }] : rows
+})
+
+function scorecardRowClass({ row }: { row: AgentStat & { isComposite?: boolean } }): string {
+  return row.isComposite ? 'composite-row' : ''
 }
 </script>
 
@@ -315,6 +343,54 @@ function shuffleTagType(v: string): 'success' | 'danger' | 'info' {
         </template>
       </el-card>
 
+      <!-- 分 Agent 记分卡 -->
+      <el-card v-if="scorecard && scorecardRows.length" shadow="never" class="mb">
+        <template #header>
+          <div class="card-title">
+            分 Agent 记分卡
+            <el-tag size="small" effect="plain">
+              {{ scorecard.horizon }} 日口径{{ scorecard.horizon_source === 'auto' ? '（自动取信号有效期）' : '' }}
+            </el-tag>
+          </div>
+        </template>
+        <div class="verdict">{{ scorecard.verdict }}</div>
+        <el-table :data="scorecardRows" size="small" stripe
+                  :row-class-name="scorecardRowClass">
+          <el-table-column label="Agent" width="110">
+            <template #default="{ row }">
+              <span :style="row.isComposite ? 'font-weight:700' : ''">{{ row.label }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="samples" label="样本" width="64" align="center" />
+          <el-table-column label="命中率" width="90" align="center">
+            <template #default="{ row }">{{ fmtRate(row.hit_rate) }}</template>
+          </el-table-column>
+          <el-table-column label="方向化收益" width="110" align="center">
+            <template #default="{ row }">
+              <span :class="(row.avg_return_pct ?? 0) >= 0 ? 'text-pos' : 'text-neg'">{{ fmtPct(row.avg_return_pct) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="t 值" width="80" align="center">
+            <template #default="{ row }">
+              <span v-if="row.t_stat !== null">{{ row.t_stat.toFixed(2) }}</span>
+              <span v-else class="sub">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="自报置信度" width="100" align="center">
+            <template #default="{ row }">
+              <span v-if="row.avg_confidence !== null">{{ fmtRate(row.avg_confidence) }}</span>
+              <span v-else class="sub">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="结论" min-width="140">
+            <template #default="{ row }">
+              <el-tag :type="scorecardTagType(row.verdict)" size="small" effect="plain">{{ row.verdict }}</el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="hint">HOLD 判断不参与定向记分；「拖后腿」的 Agent 可在系统设置中降权，或开启 IC 自适应调权自动处理。</div>
+      </el-card>
+
       <!-- 信号明细 -->
       <el-card shadow="never">
         <template #header><div class="card-title">信号明细（最近 100 条已评估）</div></template>
@@ -362,5 +438,6 @@ function shuffleTagType(v: string): 'success' | 'danger' | 'info' {
 .hint { margin-top: 14px; font-size: 12px; color: var(--muted); line-height: 1.7; }
 
 .chart { height: 280px; }
+:deep(.composite-row) { background: color-mix(in srgb, var(--accent) 8%, transparent) !important; }
 .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 400; }
 </style>

@@ -131,6 +131,25 @@ def _load_navs(db: Database, fund_code: str | None = None) -> dict[str, list[tup
     return nav_by_fund
 
 
+def _forward_returns(navs: list[tuple[str, float]], signal_date: str, action: str,
+                     horizons: tuple[int, ...]) -> tuple[str | None, dict[int, float | None]]:
+    """单条方向判断的前向收益（复盘统一口径）。
+
+    入场 = 信号日之后第 1 个交易日净值（人 T+1 执行、按 T+1 净值确认）；
+    N 日收益 = nav[入场+N]/nav[入场] - 1，BUY 记正、SELL 记负。
+    返回 (entry_date, {N: 方向化收益%})；净值未到账时 entry_date 为 None。
+    """
+    entry_idx = next((i for i, (d, _) in enumerate(navs) if d > signal_date), None)
+    if entry_idx is None:
+        return None, {n: None for n in horizons}
+    sign = 1.0 if action == "BUY" else -1.0
+    out: dict[int, float | None] = {}
+    for n in horizons:
+        j = entry_idx + n
+        out[n] = sign * (navs[j][1] / navs[entry_idx][1] - 1) * 100 if j < len(navs) else None
+    return navs[entry_idx][0], out
+
+
 def _evaluate(db: Database, fund_code: str | None,
               horizons: tuple[int, ...]) -> tuple[list[EvaluatedSignal], dict[str, list[tuple[str, float]]],
                                                    int, int, int]:
@@ -155,24 +174,15 @@ def _evaluate(db: Database, fund_code: str | None,
             continue
         actionable += 1
         navs = nav_by_fund.get(s["fund_code"], [])
-        # 入场 = 信号日之后第 1 个交易日净值（人 T+1 执行、按 T+1 净值确认）
-        entry_idx = next((i for i, (d, _) in enumerate(navs) if d > s["trade_date"]), None)
-        if entry_idx is None:
+        entry_date, rets = _forward_returns(navs, s["trade_date"], s["action"], horizons)
+        if entry_date is None:
             pending += 1
             continue
-        sign = 1.0 if s["action"] == "BUY" else -1.0
-        ev = EvaluatedSignal(
+        evaluated_signals.append(EvaluatedSignal(
             trade_date=s["trade_date"], fund_code=s["fund_code"], action=s["action"],
             composite_score=float(s["composite_score"]) if s["composite_score"] is not None else None,
-            entry_date=navs[entry_idx][0],
-        )
-        for n in horizons:
-            j = entry_idx + n
-            if j < len(navs):
-                ev.returns_pct[n] = sign * (navs[j][1] / navs[entry_idx][1] - 1) * 100
-            else:
-                ev.returns_pct[n] = None  # 该 horizon 前向净值未到 → pending
-        evaluated_signals.append(ev)
+            entry_date=entry_date, returns_pct=rets,
+        ))
     return evaluated_signals, nav_by_fund, total, actionable, pending
 
 
@@ -272,7 +282,13 @@ class ShuffleHorizonResult:
 
 
 def _r2(v: float | None) -> float | None:
-    return round(v, 2) if v is not None else None
+    if v is None:
+        return None
+    if v == float("inf"):
+        return 99.99   # JSON 不支持 Infinity，钳制为极显著标记值
+    if v == float("-inf"):
+        return -99.99
+    return round(v, 2)
 
 
 @dataclass
@@ -358,3 +374,145 @@ def shuffle_test(db: Database,
         verdict = f"样本不足（有效评估需 ≥{MIN_SAMPLES} 条，积累信号后重试）"
 
     return ShuffleTestReport(n_trials=n_trials, seed=seed, horizons=results, verdict=verdict)
+
+
+# ---------- 分 Agent 记分卡 ----------
+# 四路分析 Agent（技术/估值/消息/风险）各自的历史命中率——找出谁在拖后腿。
+# debate Agent 的角色是"否决"而非"定向"，不参与定向记分。
+
+AGENT_LABELS = {"technical": "技术面", "valuation": "估值面", "sentiment": "消息面", "risk": "风险面"}
+
+
+@dataclass
+class AgentStat:
+    agent: str
+    label: str
+    samples: int                 # 参与评估的方向判断数（BUY/SELL 且前向净值可用）
+    hit_rate: float | None       # 方向命中率 0~1
+    avg_return_pct: float | None # 方向化平均收益 %
+    t_stat: float | None
+    avg_confidence: float | None # 该 Agent 自报平均置信度
+    verdict: str
+
+    def to_dict(self) -> dict:
+        return {
+            "agent": self.agent, "label": self.label, "samples": self.samples,
+            "hit_rate": round(self.hit_rate, 3) if self.hit_rate is not None else None,
+            "avg_return_pct": _r2(self.avg_return_pct),
+            "t_stat": _r2(self.t_stat),
+            "avg_confidence": round(self.avg_confidence, 3) if self.avg_confidence is not None else None,
+            "verdict": self.verdict,
+        }
+
+
+@dataclass
+class AgentScorecard:
+    horizon: int                 # 评估使用的持有期
+    horizon_source: str          # auto（取信号有效期）/ manual
+    agents: list[AgentStat]
+    composite: AgentStat | None  # 最终合成信号作为基准
+    verdict: str
+
+    def to_dict(self) -> dict:
+        return {
+            "horizon": self.horizon, "horizon_source": self.horizon_source,
+            "agents": [a.to_dict() for a in self.agents],
+            "composite": self.composite.to_dict() if self.composite else None,
+            "verdict": self.verdict,
+        }
+
+
+def _agent_verdict(samples: int, avg_pct: float | None, t: float | None) -> str:
+    if samples < MIN_SAMPLES:
+        return "样本不足"
+    assert avg_pct is not None
+    if (t or 0) >= 2.0:
+        return "显著正向"
+    if avg_pct > 0:
+        return "方向正确不显著"
+    return "方向相反（拖后腿）" if (t or 0) > -2.0 else "显著反向"
+
+
+def _agent_stat(label: str, agent_key: str, rets: list[float], confs: list[float]) -> AgentStat:
+    arr = np.array(rets)
+    n = len(arr)
+    hit = float((arr > 0).mean())
+    avg = float(arr.mean())
+    t = None
+    if n >= 3:
+        std = arr.std(ddof=1)
+        if std > 1e-12:
+            t = float(avg / (std / np.sqrt(n)))
+        elif abs(avg) > 1e-12:
+            # 零方差且非零均值：全对/全错的完美单调样本 → 极显著（保留符号）
+            t = float("inf") if avg > 0 else float("-inf")
+    return AgentStat(agent=agent_key, label=label, samples=n, hit_rate=hit,
+                     avg_return_pct=avg, t_stat=t,
+                     avg_confidence=float(np.mean(confs)) if confs else None,
+                     verdict=_agent_verdict(n, avg, t))
+
+
+def agent_scorecard(db: Database,
+                    fund_code: str | None = None,
+                    horizon: int | None = None) -> AgentScorecard:
+    """四路 Agent + 合成信号的方向记分卡（复盘统一口径）。
+
+    - horizon: None = 自动取信号复盘的有效期（best_horizon），无有效期时回落 5 日
+    - 每条 agent_logs 的 BUY/SELL 方向判断，按 T+1 入场、N 日方向化收益评估
+    - HOLD 判断不参与定向记分（与信号复盘一致：无方向无对错）
+    """
+    # ---- 自动选持有期：优先信号有效期 ----
+    horizon_source = "manual"
+    if horizon is None:
+        horizon = review_signals(db, fund_code).best_horizon or 5
+        horizon_source = "auto"
+    horizons = (int(horizon),)
+
+    nav_by_fund = _load_navs(db, fund_code)
+    where, params = "", ()
+    if fund_code:
+        where = " WHERE fund_code=?"
+        params = (fund_code,)
+    log_rows = db.query(
+        f"SELECT trade_date, fund_code, agent, direction, confidence FROM agent_logs"
+        f"{where} ORDER BY trade_date")
+
+    # agent → (方向化收益列表, 置信度列表)
+    buckets: dict[str, tuple[list[float], list[float]]] = {
+        a: ([], []) for a in AGENT_LABELS}
+    for r in log_rows:
+        if r["agent"] not in buckets or r["direction"] not in ("BUY", "SELL"):
+            continue
+        _, rets = _forward_returns(nav_by_fund.get(r["fund_code"], []),
+                                   r["trade_date"], r["direction"], horizons)
+        if rets[horizons[0]] is None:
+            continue
+        buckets[r["agent"]][0].append(rets[horizons[0]])
+        conf = float(r["confidence"]) if r["confidence"] is not None else None
+        if conf is not None:
+            buckets[r["agent"]][1].append(conf)
+
+    agents = [_agent_stat(label, key, *buckets[key]) for key, label in AGENT_LABELS.items()]
+
+    # ---- 合成信号基准（同口径、同持有期）----
+    evaluated, _, _, _, _ = _evaluate(db, fund_code, horizons)
+    composite = None
+    rets_c = [ev.returns_pct[horizons[0]] for ev in evaluated if ev.returns_pct.get(horizons[0]) is not None]
+    if rets_c:
+        composite = _agent_stat("合成信号", "composite", rets_c, [])
+
+    useful = [a for a in agents if a.samples >= MIN_SAMPLES]
+    if not useful and not (composite and composite.samples >= MIN_SAMPLES):
+        verdict = f"样本不足（各路 Agent 有效评估需 ≥{MIN_SAMPLES} 条）"
+    else:
+        ranked = sorted(useful, key=lambda a: a.avg_return_pct or 0, reverse=True)
+        parts = []
+        if ranked:
+            best, worst = ranked[0], ranked[-1]
+            parts.append(f"贡献最大：{best.label}（{best.avg_return_pct:+.2f}%）")
+            if len(ranked) > 1 and (worst.avg_return_pct or 0) < 0:
+                parts.append(f"拖后腿：{worst.label}（{worst.avg_return_pct:+.2f}%）——考虑降权")
+        verdict = "；".join(parts) or "各路 Agent 暂无有效样本"
+
+    return AgentScorecard(horizon=horizons[0], horizon_source=horizon_source,
+                          agents=agents, composite=composite, verdict=verdict)

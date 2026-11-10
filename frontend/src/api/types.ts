@@ -297,6 +297,27 @@ export interface ShuffleTestReport {
   verdict: string
 }
 
+// ---------- 分 Agent 记分卡 ----------
+
+export interface AgentStat {
+  agent: string
+  label: string
+  samples: number
+  hit_rate: number | null
+  avg_return_pct: number | null
+  t_stat: number | null
+  avg_confidence: number | null
+  verdict: string
+}
+
+export interface AgentScorecard {
+  horizon: number
+  horizon_source: 'auto' | 'manual'
+  agents: AgentStat[]
+  composite: AgentStat | null
+  verdict: string
+}
+
 export interface BacktestMetrics {
   fund_code: FundCode
   fund_name: string

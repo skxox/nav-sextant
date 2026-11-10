@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backend.db import Database
-from backend.engine.review import review_signals, shuffle_test
+from backend.engine.review import agent_scorecard, review_signals, shuffle_test
 
 
 def _db(tmp_path: Path) -> Database:
@@ -289,3 +289,97 @@ def test_shuffle_multi_fund_pools_independently(tmp_path):
     assert h.samples == 24
     assert h.real_avg_pct == pytest.approx(5.0)  # 双双命中
     assert h.verdict == "显著优于随机"
+
+
+# ---------- 分 Agent 记分卡 ----------
+
+def _agent_log(db: Database, code: str, day: str, agent: str, direction: str,
+               confidence: float = 0.6) -> None:
+    db.save_agent_log({
+        "trade_date": day, "fund_code": code, "agent": agent, "score": 0.3,
+        "direction": direction, "confidence": confidence, "summary": "测试",
+        "fallback_used": 0, "detail_json": "{}", "data_quality": 1.0,
+    })
+
+
+def test_scorecard_separates_agents_by_accuracy(tmp_path):
+    """技术面全对、估值面全错 → 命中率 1.0 vs 0.0，verdict 区分。"""
+    db, d = _trend_db(tmp_path, n_blocks=10, up=True)  # 入场后 +5%
+    for i in range(10):
+        _agent_log(db, "110022", d[i * 3], "technical", "BUY")
+        _agent_log(db, "110022", d[i * 3], "valuation", "SELL")  # 反向 → -5%
+    r = agent_scorecard(db, horizon=1)
+    tech = next(a for a in r.agents if a.agent == "technical")
+    val = next(a for a in r.agents if a.agent == "valuation")
+    assert tech.samples == 10 and tech.hit_rate == 1.0
+    assert tech.avg_return_pct == pytest.approx(5.0)
+    assert tech.verdict == "显著正向"
+    assert val.samples == 10 and val.hit_rate == 0.0
+    assert val.verdict in ("方向相反（拖后腿）", "显著反向")
+    assert "贡献最大：技术面" in r.verdict and "拖后腿：估值面" in r.verdict
+
+
+def test_scorecard_hold_directions_excluded(tmp_path):
+    """HOLD 判断不参与定向记分。"""
+    db, d = _trend_db(tmp_path, n_blocks=6, up=True)
+    for i in range(6):
+        _agent_log(db, "110022", d[i * 3], "sentiment", "HOLD")
+        _agent_log(db, "110022", d[i * 3], "technical", "BUY")
+    r = agent_scorecard(db, horizon=1)
+    sent = next(a for a in r.agents if a.agent == "sentiment")
+    assert sent.samples == 0
+    assert next(a for a in r.agents if a.agent == "technical").samples == 6
+
+
+def test_scorecard_composite_baseline_present(tmp_path):
+    """合成信号（signals 表）作为基准行参与对比。"""
+    db, d = _trend_db(tmp_path, n_blocks=6, up=True)
+    for i in range(6):
+        _agent_log(db, "110022", d[i * 3], "technical", "BUY")
+        _signal(db, "110022", d[i * 3], "BUY")
+    r = agent_scorecard(db, horizon=1)
+    assert r.composite is not None
+    assert r.composite.agent == "composite"
+    assert r.composite.samples == 6
+    assert r.composite.avg_return_pct == pytest.approx(5.0)
+
+
+def test_scorecard_auto_horizon_uses_best_horizon(tmp_path):
+    """horizon=None → 自动取复盘有效期（有效期来自 signals 表）。"""
+    db = _db(tmp_path)
+    n_blocks = 8
+    d = _days("2026-01-01", n_blocks * 8)
+    block = [1.0, 1.0, 1.01, 1.03, 1.09, 1.09, 1.04, 1.04]  # N=3 峰值
+    _nav("110022", d, block * n_blocks, db)
+    for i in range(n_blocks):
+        _agent_log(db, "110022", d[i * 8], "technical", "BUY")
+        _signal(db, "110022", d[i * 8], "BUY")  # 有效期以最终信号为准
+    r = agent_scorecard(db)  # 不传 horizon
+    assert r.horizon == 3 and r.horizon_source == "auto"
+    r_manual = agent_scorecard(db, horizon=1)
+    assert r_manual.horizon == 1 and r_manual.horizon_source == "manual"
+
+
+def test_scorecard_debate_agent_not_scored(tmp_path):
+    """debate 角色是否决而非定向，不进四路记分。"""
+    db, d = _trend_db(tmp_path, n_blocks=6, up=True)
+    for i in range(6):
+        _agent_log(db, "110022", d[i * 3], "debate", "BUY")
+    r = agent_scorecard(db, horizon=1)
+    assert all(a.agent != "debate" for a in r.agents)
+
+
+def test_scorecard_insufficient_samples(tmp_path):
+    db, d = _trend_db(tmp_path, n_blocks=3, up=True)
+    _agent_log(db, "110022", d[0], "technical", "BUY")
+    r = agent_scorecard(db, horizon=1)
+    assert next(a for a in r.agents if a.agent == "technical").verdict == "样本不足"
+    assert "样本不足" in r.verdict
+
+
+def test_scorecard_avg_confidence_reported(tmp_path):
+    db, d = _trend_db(tmp_path, n_blocks=6, up=True)
+    for i in range(6):
+        _agent_log(db, "110022", d[i * 3], "technical", "BUY", confidence=0.4 + i * 0.05)
+    r = agent_scorecard(db, horizon=1)
+    assert next(a for a in r.agents if a.agent == "technical").avg_confidence == pytest.approx(0.525)
