@@ -31,7 +31,7 @@ from ..factors.momentum import compute_momentum
 from ..factors.nav_estimate import estimate_nav
 from ..factors.valuation import compute_valuation
 from ..llm.client import LLMClient, LLMError
-from ..notify import Notifier
+from ..notify import ActionContext, Notifier
 from .debate import run_debate
 from .orchestrator import synthesize
 from .portfolio import portfolio_drawdown
@@ -260,6 +260,21 @@ class Pipeline:
         )
 
     # ---------- 主入口 ----------
+    def _action_context(self) -> ActionContext:
+        """推送 actionable 化的现态：fund_position 持仓 + 组合市值（份额×最新官方净值）。"""
+        positions: dict[str, float | None] = {}
+        value = 0.0
+        for r in self.db.query("SELECT fund_code, position, shares FROM fund_position"):
+            positions[r["fund_code"]] = float(r["position"]) if r["position"] is not None else None
+            if r["shares"]:
+                nav = self.db.query(
+                    "SELECT nav FROM fund_nav WHERE fund_code=? AND nav IS NOT NULL "
+                    "ORDER BY trade_date DESC LIMIT 1", (r["fund_code"],))
+                if nav and nav[0]["nav"]:
+                    value += float(r["shares"]) * float(nav[0]["nav"])
+        return ActionContext(positions=positions, portfolio_value=value or None)
+
+
     def run(self, force: bool = False) -> list[SignalModel]:
         today = date.today()
         if not is_trading_day(today):
@@ -285,7 +300,9 @@ class Pipeline:
                 results.append(self.analyze_fund(fund, trade_date, news))
             except Exception as e:  # noqa: BLE001
                 logger.exception("基金 %s 分析失败: %s", fund.code, e)
-        self.notifier.send([s for s in results if s.action in ("BUY", "SELL") or not s.risk_passed])
+        self.notifier.send(
+            [s for s in results if s.action in ("BUY", "SELL") or not s.risk_passed],
+            ctx=self._action_context())
         logger.info("流水线完成：%d 只基金", len(results))
         return results
 
