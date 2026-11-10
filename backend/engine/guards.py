@@ -63,3 +63,48 @@ def whipsaw_guard(db: Database, trade_date: str, fund_code: str,
               f"（{last['trade_date']}，{gap} 交易日）≤ {cooldown_days} 日，"
               f"维持仓位 {prev_pos:.0%}")
     return "HOLD", prev_pos, list(reasons) + [reason]
+
+
+# ---------- 最小交易幅度（min trade guard）----------
+# 目标仓位变动低于阈值时不出调仓信号——场外基金申赎费率高（申购 ~0.15%、
+# 赎回 0.5% 起、7 日内 1.5%），频繁小额调仓的费率成本直接吃掉调仓收益。
+# 无开源项目覆盖：场外基金申赎费率为本场景特有（ROADMAP A 组）。
+#
+# 基准仓位：优先 fund_position 表（人记录的实际持仓）；缺失时回落上一条
+# 信号的目标仓位；两者皆缺则不压制（无基准无从比较）。
+# 注意：风控否决的信号（target 已被置 0）不走此守卫——风控优先于磨损优化。
+
+
+def min_trade_guard(db: Database, trade_date: str, fund_code: str,
+                    action: str, target_position: float, reasons: list[str],
+                    min_change: float) -> tuple[str, float, list[str]]:
+    """末端信号整形：调仓幅度低于阈值 → HOLD + 维持基准仓位。
+
+    返回 (action, target_position, reasons)；reasons 追加 [min_trade] 标记。
+    """
+    if min_change <= 0 or action not in ("BUY", "SELL"):
+        return action, target_position, reasons
+
+    pos_row = db.query(
+        "SELECT position FROM fund_position WHERE fund_code=?", (fund_code,))
+    if pos_row and pos_row[0]["position"] is not None:
+        current, basis = float(pos_row[0]["position"]), "实际持仓"
+    else:
+        last = db.query(
+            """SELECT target_position FROM signals
+               WHERE fund_code=? AND trade_date < ?
+               ORDER BY trade_date DESC LIMIT 1""",
+            (fund_code, trade_date))
+        if last and last[0]["target_position"] is not None:
+            current, basis = float(last[0]["target_position"]), "上次信号仓位"
+        else:
+            return action, target_position, reasons  # 无基准：不压制
+
+    delta = abs(target_position - current)
+    if delta >= min_change - 1e-9:  # 容差：浮点表示下 0.30-0.25 略小于 0.05
+        return action, target_position, reasons
+
+    reason = (f"[min_trade] 调仓幅度 {delta:.1%} 低于最小交易幅度 "
+              f"{min_change:.0%}（基准：{basis} {current:.0%} → 目标 "
+              f"{target_position:.0%}），维持现仓位避免费率磨损")
+    return "HOLD", current, list(reasons) + [reason]

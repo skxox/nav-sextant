@@ -397,6 +397,7 @@ export interface StrategySettings {
   ic_weighting_enabled?: boolean
   ic_min_samples?: number
   whipsaw_cooldown_days?: number
+  min_trade_change?: number
 }
 
 export interface SchedulerSettings {

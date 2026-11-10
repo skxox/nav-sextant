@@ -15,7 +15,7 @@ const strategy = reactive({
   max_pos: 0.3, max_dd: 0.15, cash: 0.1,
   momentum_windows: '5, 20, 60', momentum_weights: '0.2, 0.3, 0.5', val_window: 750,
   ic_enabled: false, ic_min_samples: 30,
-  whipsaw_days: 3,
+  whipsaw_days: 3, min_trade: 0.05,
 })
 const debate = reactive({ rounds: 2, consensus_early_stop: true })
 const scheduler = reactive({ enabled: false, run_at: '18:00', weekdays_only: true })
@@ -50,6 +50,7 @@ function fill(b: SettingsBundle): void {
     ic_enabled: b.settings.ic_weighting_enabled ?? false,
     ic_min_samples: b.settings.ic_min_samples ?? 30,
     whipsaw_days: b.settings.whipsaw_cooldown_days ?? 3,
+    min_trade: b.settings.min_trade_change ?? 0.05,
   })
   Object.assign(debate, b.debate)
   Object.assign(scheduler, b.scheduler)
@@ -96,6 +97,7 @@ function strategyPatch(): Record<string, unknown> | null {
     ic_weighting_enabled: strategy.ic_enabled,
     ic_min_samples: Math.round(strategy.ic_min_samples),
     whipsaw_cooldown_days: Math.round(strategy.whipsaw_days),
+    min_trade_change: strategy.min_trade,
   }
 }
 const saveStrategy = (): Promise<void> => {
@@ -234,6 +236,11 @@ onMounted(load)
             <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">?</el-tag>
           </el-tooltip></label>
           <el-input-number v-model="strategy.whipsaw_days" :min="0" :max="30" :step="1" style="width: 100%" /></div>
+        <div class="field"><label>最小调仓幅度（仓位比例）
+          <el-tooltip placement="top" content="费率盈亏平衡防护：目标仓位相对当前仓位的变动低于此值时压制为 HOLD 并维持现仓位——场外基金申赎费率高（申购约 0.15%、赎回 0.5% 起），小额调仓的收益盖不住费率。基准优先用实际持仓，其次上次信号仓位。0 = 关闭。">
+            <el-tag size="small" type="info" effect="plain" style="margin-left: 4px">?</el-tag>
+          </el-tooltip></label>
+          <el-input-number v-model="strategy.min_trade" :min="0" :max="0.5" :step="0.01" :precision="2" style="width: 100%" /></div>
       </div>
       <div class="row-actions">
         <span class="text-muted" style="font-size: 12px">

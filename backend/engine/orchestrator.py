@@ -72,9 +72,11 @@ def synthesize(fund_code: str, fund_name: str, trade_date: str,
     elif score <= sell_th:
         action = "SELL"
 
-    # 仓位建议：信号强度线性映射到 [0, max_single_fund_position]
+    # 仓位建议：信号强度线性映射，clip 到 [0, max_single_fund_position]
+    # （修复：未 clip 时 composite > 0.5 的强信号 target 超上限，必被单基仓位风控拦截）
     strength = abs(score)
-    target = round(settings.max_single_fund_position * strength * 2, 3) if action != "HOLD" else 0.0
+    target = round(min(settings.max_single_fund_position * strength * 2,
+                      settings.max_single_fund_position), 3) if action != "HOLD" else 0.0
 
     reasons = [f"[{o.agent}] {o.summary}" for o in outputs.values() if o.summary]
     if disagreement:

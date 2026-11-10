@@ -80,6 +80,8 @@ class Settings(BaseModel):
                                 description="IC 检验最小样本数，不足则不调整")
     whipsaw_cooldown_days: int = Field(default=3, ge=0, le=30,
                                        description="反向信号冷却期（交易日）：N 日内反向信号压制为 HOLD 并维持原仓位，0 = 关闭")
+    min_trade_change: float = Field(default=0.05, ge=0, le=0.5,
+                                    description="最小调仓幅度（仓位比例）：目标仓位相对当前仓位的变动低于此值时压制为 HOLD，避免申赎费磨损，0 = 关闭")
 
     # 兼容旧字段的便捷属性（engine 层使用）
     @property

@@ -36,7 +36,7 @@ from .debate import run_debate
 from .orchestrator import synthesize
 from .portfolio import portfolio_drawdown
 from .risk_control import check
-from .whipsaw import whipsaw_guard
+from .guards import min_trade_guard, whipsaw_guard
 
 logger = logging.getLogger(__name__)
 
@@ -201,7 +201,12 @@ class Pipeline:
         if not risk_result.passed:
             signal.target_position = 0.0
 
-        # 抖动抑制（末端整形）：冷却期内反向信号压制为 HOLD 并维持原仓位
+        # 末端信号守卫：最小交易幅度（仅风控通过时——风控否决优先于磨损优化）
+        # + 抖动抑制（冷却期内反向压制）；均压制为 HOLD 并维持基准仓位
+        if risk_result.passed:
+            signal.action, signal.target_position, signal.reasons = min_trade_guard(
+                self.db, trade_date, fund.code, signal.action, signal.target_position,
+                signal.reasons, self.config.settings.min_trade_change)
         signal.action, signal.target_position, signal.reasons = whipsaw_guard(
             self.db, trade_date, fund.code, signal.action, signal.target_position,
             signal.reasons, self.config.settings.whipsaw_cooldown_days)

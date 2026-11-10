@@ -1,4 +1,4 @@
-"""信号抖动抑制测试：冷却期内反向压制、间隔口径与各类放行情形。"""
+"""末端信号守卫测试：抖动抑制（whipsaw）+ 最小交易幅度（min_trade）。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +7,7 @@ import pandas as pd
 
 from backend.config import Settings
 from backend.db import Database
-from backend.engine.whipsaw import whipsaw_guard
+from backend.engine.guards import min_trade_guard, whipsaw_guard
 
 
 def _db(tmp_path: Path) -> Database:
@@ -174,10 +174,12 @@ def test_pipeline_end_to_end_suppresses_whipsaw(tmp_path, app_config):
         def analyze(self, ctx):
             return self._out
 
+    app_config.llm.debate_enabled = False  # 离线：禁辩论层
     db = Database(app_config.db_path)
     days = _days("2026-06-01", 10)
     db.upsert_nav([("110022", d, 1.0 + i * 1e-4, 1.0 + i * 1e-4) for i, d in enumerate(days)])
     _seed_signal(db, "110022", days[-2], "BUY", target=0.3)  # 昨日 BUY
+    _seed_position(db, "110022", 0.0)  # 实际空仓：min_trade 直通（|0.3-0|=0.3），聚焦 whipsaw
 
     def out(name, score, direction, conf):
         return AgentOutput(agent=name, score=score, direction=direction,
@@ -199,3 +201,167 @@ def test_pipeline_end_to_end_suppresses_whipsaw(tmp_path, app_config):
     saved = db.query('SELECT action, target_position FROM signals WHERE trade_date=?', (days[-1],))
     assert saved[0]["action"] == "HOLD"
     assert abs(float(saved[0]["target_position"]) - 0.3) < 1e-9
+
+
+# ---------- 最小交易幅度 ----------
+
+def _seed_position(db: Database, code: str, position: float) -> None:
+    db.execute("INSERT OR REPLACE INTO fund_position (fund_code, position) VALUES (?,?)",
+               (code, position))
+
+
+def test_small_change_suppressed(tmp_path):
+    """BUY 28% → 30%（变动 2% < 5%）→ HOLD 并维持实际持仓仓位。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.28)
+    action, pos, reasons = min_trade_guard(db, d[1], "110022", "BUY", 0.30, [], 0.05)
+    assert action == "HOLD"
+    assert pos == 0.28
+    assert any(r.startswith("[min_trade]") and "2.0%" in r for r in reasons)
+
+
+def test_large_change_passes(tmp_path):
+    """BUY 20% → 30%（变动 10% ≥ 5%）→ 放行。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.20)
+    action, pos, reasons = min_trade_guard(db, d[1], "110022", "BUY", 0.30, [], 0.05)
+    assert (action, pos, reasons) == ("BUY", 0.30, [])
+
+
+def test_sell_small_reduction_suppressed(tmp_path):
+    """SELL 30% → 27%（减仓 3% < 5%）同样压制——赎回费更贵。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.30)
+    action, pos, _ = min_trade_guard(db, d[1], "110022", "SELL", 0.27, [], 0.05)
+    assert action == "HOLD" and pos == 0.30
+
+
+def test_boundary_equal_to_threshold_passes(tmp_path):
+    """变动恰等于阈值（5%）→ 放行（≥ 不含等于之外的压制）。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.25)
+    action, _, _ = min_trade_guard(db, d[1], "110022", "BUY", 0.30, [], 0.05)
+    assert action == "BUY"
+
+
+def test_zero_threshold_disables(tmp_path):
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.30)
+    assert min_trade_guard(db, d[1], "110022", "BUY", 0.31, [], 0) == ("BUY", 0.31, [])
+
+
+def test_hold_passes_through(tmp_path):
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    _seed_position(db, "110022", 0.30)
+    assert min_trade_guard(db, d[1], "110022", "HOLD", 0.30, [], 0.05) == ("HOLD", 0.30, [])
+
+
+def test_falls_back_to_last_signal_position(tmp_path):
+    """无实际持仓记录时，用上次信号目标仓位作基准。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 6)
+    _seed_nav(db, "110022", d)
+    _seed_signal(db, "110022", d[0], "BUY", target=0.30)   # 上次信号 30%
+    # 今日 HOLD→BUY 31%：变动 1% < 5% → 压制，维持 30%
+    action, pos, reasons = min_trade_guard(db, d[3], "110022", "BUY", 0.31, [], 0.05)
+    assert action == "HOLD" and pos == 0.30
+    assert any("上次信号仓位" in r for r in reasons)
+
+
+def test_no_basis_passes_through(tmp_path):
+    """既无持仓记录也无历史信号 → 无基准，不压制。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 4)
+    _seed_nav(db, "110022", d)
+    assert min_trade_guard(db, d[1], "110022", "BUY", 0.02, [], 0.05) == ("BUY", 0.02, [])
+
+
+def test_position_takes_precedence_over_signal(tmp_path):
+    """实际持仓与上次信号仓位并存时，以实际持仓为准。"""
+    db = _db(tmp_path)
+    d = _days("2026-01-01", 6)
+    _seed_nav(db, "110022", d)
+    _seed_signal(db, "110022", d[0], "BUY", target=0.30)
+    _seed_position(db, "110022", 0.10)                     # 实际只买到 10%
+    # BUY 目标 12%：对实际持仓变动 2% → 压制；对信号仓位则是放大变动
+    action, pos, _ = min_trade_guard(db, d[3], "110022", "BUY", 0.12, [], 0.05)
+    assert action == "HOLD" and pos == 0.10
+
+
+def test_settings_default_min_trade_change():
+    assert Settings().min_trade_change == 0.05
+
+
+# ---------- 管道集成：min_trade 在入库前生效 ----------
+
+def _stub_pipeline(app_config, db):
+    from backend.agents.base import AgentOutput, BaseAgent
+    from backend.engine.pipeline import Pipeline
+
+    class StubAgent(BaseAgent):
+        def __init__(self, name, output):
+            self.name = name
+            self._out = output
+
+        def analyze(self, ctx):
+            return self._out
+
+    def out(name, score, direction, conf):
+        return AgentOutput(agent=name, score=score, direction=direction,
+                           confidence=conf, summary="桩输出")
+
+    pipe = Pipeline(app_config, db)
+    pipe.agents = [
+        StubAgent("technical", out("technical", 0.9, "BUY", 0.9)),
+        StubAgent("valuation", out("valuation", 0.0, "HOLD", 0.1)),
+        StubAgent("sentiment", out("sentiment", 0.0, "HOLD", 0.1)),
+        StubAgent("risk", out("risk", 0.0, "HOLD", 0.1)),
+    ]
+    return pipe
+
+
+def test_pipeline_suppresses_small_trade(tmp_path, app_config):
+    """端到端：BUY 目标 30%，实际持仓 29%（变动 1%）→ 入库 HOLD 维持 29%。"""
+    from backend.db import Database
+
+    db = Database(app_config.db_path)
+    days = _days("2026-06-01", 10)
+    db.upsert_nav([("110022", d, 1.0 + i * 1e-4, 1.0 + i * 1e-4) for i, d in enumerate(days)])
+    _seed_position(db, "110022", 0.29)
+
+    pipe = _stub_pipeline(app_config, db)
+    sig = pipe.analyze_fund(app_config.funds[0], trade_date=days[-1], news=[])
+
+    assert sig.composite_score >= app_config.settings.thresholds.buy  # 原始为 BUY
+    assert sig.action == "HOLD"
+    assert abs(sig.target_position - 0.29) < 1e-9
+    assert any(r.startswith("[min_trade]") for r in sig.reasons)
+
+
+def test_risk_veto_not_undone_by_min_trade(tmp_path, app_config):
+    """风控否决（现金缓冲拦截）的信号不走 min_trade：target 保持 0 而非弹回仓位。"""
+    from backend.db import Database
+
+    db = Database(app_config.db_path)
+    days = _days("2026-06-01", 10)
+    db.upsert_nav([("110022", d, 1.0 + i * 1e-4, 1.0 + i * 1e-4) for i, d in enumerate(days)])
+    _seed_position(db, "110022", 0.95)  # 现金缓冲 0.10 → 0.95 触发拦截
+
+    pipe = _stub_pipeline(app_config, db)
+    sig = pipe.analyze_fund(app_config.funds[0], trade_date=days[-1], news=[])
+
+    assert not sig.risk_passed                    # 风控拦截生效
+    assert sig.target_position == 0.0             # min_trade 未把仓位弹回 0.95
+    assert not any(r.startswith("[min_trade]") for r in sig.reasons)
