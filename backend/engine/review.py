@@ -436,6 +436,11 @@ def _agent_verdict(samples: int, avg_pct: float | None, t: float | None) -> str:
 def _agent_stat(label: str, agent_key: str, rets: list[float], confs: list[float]) -> AgentStat:
     arr = np.array(rets)
     n = len(arr)
+    if n == 0:  # 无可评估样本：None 而非 NaN（NaN 进 JSON 前端必炸）
+        return AgentStat(agent=agent_key, label=label, samples=0, hit_rate=None,
+                         avg_return_pct=None, t_stat=None,
+                         avg_confidence=float(np.mean(confs)) if confs else None,
+                         verdict=_agent_verdict(0, None, None))
     hit = float((arr > 0).mean())
     avg = float(arr.mean())
     t = None

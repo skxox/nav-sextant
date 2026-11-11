@@ -364,6 +364,41 @@ export interface AgentScorecard {
   verdict: string
 }
 
+// ---------- IC 调权 A/B 对照 ----------
+
+export interface ICArmStat {
+  label: string
+  actionable: number
+  evaluated: number
+  win_rate: number | null
+  avg_return_pct: number | null
+  t_stat: number | null
+}
+
+export interface FundABResult {
+  fund_code: FundCode
+  fund_name: string
+  signal_days: number
+  agreement_rate: number | null
+  churn_off: number
+  churn_on: number
+  off: ICArmStat | null
+  on: ICArmStat | null
+  delta_avg_pct: number | null
+  ic_active_days: number
+  verdict: string
+}
+
+export interface ICABReport {
+  horizon: number
+  horizon_source: 'auto' | 'manual'
+  step: number
+  funds: FundABResult[]
+  pooled_off: ICArmStat | null
+  pooled_on: ICArmStat | null
+  verdict: string
+}
+
 export interface BacktestMetrics {
   fund_code: FundCode
   fund_name: string

@@ -218,6 +218,20 @@ def review_agents(fund_code: str | None = None, horizon: int | None = None):
     return agent_scorecard(db, fund_code, horizon=horizon).to_dict()
 
 
+@app.get("/api/review/ic")
+def review_ic(fund_code: str | None = None, horizon: int | None = None):
+    """IC 调权 A/B 对照：确定性 Agent 走查重放，开 vs 关的信号质量差异。
+
+    horizon 缺省自动取复盘有效期；IC 检验每 4 个信号日（约月度）重估，
+    全程只用 ≤T 数据，无未来信息。
+    """
+    from ..engine.ic_ab import ic_ab_test
+    cfg = get_cfg()
+    horizon = min(max(horizon, 1), 60) if horizon is not None else None
+    return ic_ab_test(db, cfg.funds, cfg.settings, fund_code=fund_code,
+                      horizon=horizon).to_dict()
+
+
 # ---------- 行情与持仓 ----------
 @app.get("/api/nav/{fund_code}")
 def nav_history(fund_code: str, limit: int = 250):

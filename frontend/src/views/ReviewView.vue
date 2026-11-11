@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/api/client'
-import type { FundInfo, SignalReviewReport, ReviewHorizonStat, ShuffleTestReport, AgentScorecard, AgentStat } from '@/api/types'
+import type { FundInfo, SignalReviewReport, ReviewHorizonStat, ShuffleTestReport, AgentScorecard, AgentStat, ICABReport } from '@/api/types'
 import { useChart } from '@/composables/useChart'
 import { ACCENT, UP_COLOR, DOWN_COLOR, axisLabelStyle, axisLineStyle, splitLineStyle } from '@/utils/chartTheme'
 import type { EChartsOption } from 'echarts'
@@ -176,6 +176,27 @@ const scorecardRows = computed<(AgentStat & { isComposite?: boolean })[]>(() => 
 
 function scorecardRowClass({ row }: { row: AgentStat & { isComposite?: boolean } }): string {
   return row.isComposite ? 'composite-row' : ''
+}
+
+// ---- IC 调权 A/B 对照 ----
+const icab = ref<ICABReport | null>(null)
+const icabRunning = ref(false)
+
+async function runICAB(): Promise<void> {
+  icabRunning.value = true
+  try {
+    icab.value = await api.icABTest(fundCode.value || undefined)
+  } finally {
+    icabRunning.value = false
+  }
+}
+
+watch(fundCode, () => { icab.value = null })
+
+function icVerdictType(v: string): 'success' | 'danger' | 'info' {
+  if (v.includes('IC 调权更优')) return 'success'
+  if (v.includes('关闭更优')) return 'danger'
+  return 'info'
 }
 </script>
 
@@ -391,6 +412,7 @@ function scorecardRowClass({ row }: { row: AgentStat & { isComposite?: boolean }
         <div class="hint">HOLD 判断不参与定向记分；「拖后腿」的 Agent 可在系统设置中降权，或开启 IC 自适应调权自动处理。</div>
       </el-card>
 
+
       <!-- 信号明细 -->
       <el-card shadow="never">
         <template #header><div class="card-title">信号明细（最近 100 条已评估）</div></template>
@@ -419,6 +441,81 @@ function scorecardRowClass({ row }: { row: AgentStat & { isComposite?: boolean }
         </el-table>
       </el-card>
     </template>
+
+      <!-- IC 调权 A/B 对照 -->
+      <el-card shadow="never" class="mb">
+        <template #header>
+          <div class="card-title">
+            IC 调权对照（A/B 重放）
+            <el-button size="small" type="primary" plain :loading="icabRunning" @click="runICAB">
+              {{ icab ? '重新对照' : '运行对照' }}
+            </el-button>
+          </div>
+        </template>
+        <div v-if="!icab" class="hint">
+          对历史每个信号日用 ≤当日 数据重算三路确定性 Agent（消息面不可离线复现，两臂同时剔除），
+          仅比「开 / 关 IC 调权」两臂的信号质量——回答「IC 调权到底该不该默认开」。
+        </div>
+        <template v-else>
+          <div class="verdict" :class="{ good: icVerdictType(icab.verdict) === 'success' }">
+            {{ icab.verdict }}
+            <el-tag size="small" effect="plain" style="margin-left: 8px">
+              {{ icab.horizon }} 日口径{{ icab.horizon_source === 'auto' ? '（自动取信号有效期）' : '' }}
+            </el-tag>
+          </div>
+          <el-table :data="icab.funds" size="small" stripe>
+            <el-table-column label="基金" min-width="120">
+              <template #default="{ row }">{{ row.fund_name }}</template>
+            </el-table-column>
+            <el-table-column prop="signal_days" label="重放信号日" width="90" align="center" />
+            <el-table-column label="关闭：均值 / 命中率" width="130" align="center">
+              <template #default="{ row }">
+                <span v-if="row.off && row.off.avg_return_pct !== null" :class="row.off.avg_return_pct >= 0 ? 'text-pos' : 'text-neg'">
+                  {{ fmtPct(row.off.avg_return_pct) }} / {{ fmtRate(row.off.win_rate) }}
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="开启：均值 / 命中率" width="130" align="center">
+              <template #default="{ row }">
+                <span v-if="row.on && row.on.avg_return_pct !== null" :class="row.on.avg_return_pct >= 0 ? 'text-pos' : 'text-neg'">
+                  {{ fmtPct(row.on.avg_return_pct) }} / {{ fmtRate(row.on.win_rate) }}
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="Δ 均值" width="86" align="center">
+              <template #default="{ row }">
+                <span v-if="row.delta_avg_pct !== null" :class="row.delta_avg_pct >= 0 ? 'text-pos' : 'text-neg'">
+                  {{ row.delta_avg_pct >= 0 ? '+' : '' }}{{ row.delta_avg_pct.toFixed(2) }}pp
+                </span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="动作一致率" width="86" align="center">
+              <template #default="{ row }">
+                <span v-if="row.agreement_rate !== null">{{ fmtRate(row.agreement_rate) }}</span>
+                <span v-else class="sub">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="换手（关/开）" width="96" align="center">
+              <template #default="{ row }">{{ row.churn_off }} / {{ row.churn_on }}</template>
+            </el-table-column>
+            <el-table-column label="结论" min-width="150">
+              <template #default="{ row }">
+                <el-tag :type="icVerdictType(row.verdict)" size="small" effect="plain">{{ row.verdict }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-if="icab.pooled_off && icab.pooled_on" class="hint">
+            合并口径（{{ icab.pooled_off.evaluated }} vs {{ icab.pooled_on.evaluated }} 条可评估）：
+            关闭 {{ fmtPct(icab.pooled_off.avg_return_pct) }} / 开启 {{ fmtPct(icab.pooled_on.avg_return_pct) }}
+            （t 值 {{ icab.pooled_off.t_stat?.toFixed(2) ?? '—' }} / {{ icab.pooled_on.t_stat?.toFixed(2) ?? '—' }}）。
+            IC 调整实际生效的信号日 {{ icab.funds.reduce((s, f) => s + f.ic_active_days, 0) }} / {{ icab.funds.reduce((s, f) => s + f.signal_days, 0) }}。
+          </div>
+          <div class="hint">无未来数据（每信号日仅用 ≤当日 序列）；IC 检验约月度重估，与实盘节奏一致；样本随净值历史自然积累。</div>
+        </template>
+      </el-card>
   </div>
 </template>
 

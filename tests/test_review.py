@@ -383,3 +383,27 @@ def test_scorecard_avg_confidence_reported(tmp_path):
         _agent_log(db, "110022", d[i * 3], "technical", "BUY", confidence=0.4 + i * 0.05)
     r = agent_scorecard(db, horizon=1)
     assert next(a for a in r.agents if a.agent == "technical").avg_confidence == pytest.approx(0.525)
+
+
+def test_scorecard_all_hold_logs_no_nan(tmp_path):
+    """回归：全部 HOLD 日志（无方向判断）→ 指标为 None 而非 NaN（NaN 会炸 JSON）。"""
+    import json as _json
+    import math
+
+    db, d = _trend_db(tmp_path, n_blocks=3, up=True)
+    for i in range(3):
+        _agent_log(db, "110022", d[i * 3], "technical", "HOLD")
+    r = agent_scorecard(db, horizon=1).to_dict()
+    tech = next(a for a in r["agents"] if a["agent"] == "technical")
+    assert tech["samples"] == 0 and tech["hit_rate"] is None and tech["avg_return_pct"] is None
+
+    def scan(o):
+        if isinstance(o, dict):
+            return all(scan(v) for v in o.values())
+        if isinstance(o, list):
+            return all(scan(v) for v in o)
+        if isinstance(o, float):
+            return math.isfinite(o)
+        return True
+    assert scan(r), "报告内不得出现 NaN/Inf"
+    _json.dumps(r, allow_nan=False)  # FastAPI 同款序列化约束

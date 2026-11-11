@@ -27,6 +27,7 @@ import type {
   SignalReviewReport,
   ShuffleTestReport,
   AgentScorecard,
+  ICABReport,
   FundCode,
   TradeDate,
   ExecutionsResponse,
@@ -147,6 +148,11 @@ export const api = {
   },
   async agentScorecard(code?: FundCode): Promise<AgentScorecard> {
     return (await http.get<AgentScorecard>('/review/agents', {
+      params: code ? { fund_code: code } : {},
+    })).data
+  },
+  async icABTest(code?: FundCode): Promise<ICABReport> {
+    return (await http.get<ICABReport>('/review/ic', {
       params: code ? { fund_code: code } : {},
     })).data
   },
