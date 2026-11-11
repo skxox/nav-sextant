@@ -19,6 +19,7 @@ import type {
   Overview,
   PenetrateInfo,
   PipelineRunResult,
+  RuntimeStatus,
   SettingsBundle,
   SettingsSection,
   Signal,
@@ -86,6 +87,9 @@ export const api = {
   },
   async overview(): Promise<Overview> {
     return (await http.get<Overview>('/overview')).data
+  },
+  async runtime(): Promise<RuntimeStatus> {
+    return (await http.get<RuntimeStatus>('/runtime')).data
   },
   async importText(text: string): Promise<ImportResult> {
     return (await http.post<ImportResult>('/import/text', { text })).data

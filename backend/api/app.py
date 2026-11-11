@@ -525,6 +525,25 @@ def _fetch_index_spot() -> list[dict]:
     return [out[c] for c in ("000001", "399001", "399006") if c in out]
 
 
+@app.get("/api/runtime")
+def runtime_status():
+    """运行保障状态：调度/心跳（最近一次流水线运行）/下次调度/备份/推送通道。"""
+    from pathlib import Path
+
+    from ..engine.backup import latest_backup
+    from ..notify import Notifier
+    cfg = get_cfg()
+    last = db.last_run()
+    return {
+        "scheduler": {"enabled": cfg.scheduler.enabled, "run_at": cfg.scheduler.run_at,
+                      "weekdays_only": cfg.scheduler.weekdays_only},
+        "next_run": _scheduler.next_run(),
+        "notifications_active": Notifier(cfg.notifications).active,
+        "last_run": dict(last) if last else None,
+        "latest_backup": latest_backup(_base_cfg.db_path.parent / "backups"),
+    }
+
+
 @app.get("/api/overview")
 def overview():
     now = time.time()
@@ -746,6 +765,10 @@ def update_settings(section: str, body: dict):
     except Exception as e:  # noqa: BLE001 pydantic.ValidationError 等
         raise HTTPException(status_code=400, detail=f"配置校验失败：{e}")
     db.set_setting(section, patch)
+    if section == "scheduler":
+        # 调度开关/时间即时生效：重启内置调度器（start 自查 enabled）
+        _scheduler.shutdown()
+        _scheduler.start()
     return {"ok": True, "effective": getattr(cfg, section).model_dump() if section != "funds" else None}
 
 

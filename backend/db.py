@@ -125,17 +125,33 @@ CREATE TABLE IF NOT EXISTS fund_config (
     sector TEXT DEFAULT '',
     updated_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
+
+-- 流水线运行日志（心跳）：调度/手动每次触发一行，含跳过与失败。
+-- 看门狗据此判断「系统是否还活着」，非交易日跳过同样记心跳。
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_date TEXT NOT NULL,          -- 触发日（自然日）
+    trade_date TEXT,                 -- 信号归属交易日（跳过时为 NULL）
+    status TEXT NOT NULL,            -- ok / partial / failed / skipped_non_trading_day / already_done
+    ok_count INTEGER DEFAULT 0,
+    fail_count INTEGER DEFAULT 0,
+    detail TEXT DEFAULT '',
+    finished_at TEXT DEFAULT (datetime('now', 'localtime'))
+);
 """
 
 
 class Database:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = db_path
         self.conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
-        # 个人单机使用：不使用回滚 journal / 磁盘临时文件（部分环境限制文件删除操作）
-        self.conn.execute("PRAGMA journal_mode=OFF")
+        # WAL：崩溃安全（中断写入可恢复，非事务中途回滚整库）+ 读写不互斥
+        # （API 读与流水线写并发）。temp_store 内存化避免磁盘临时文件。
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.execute("PRAGMA temp_store=MEMORY")
         self.conn.executescript(SCHEMA)
         self.conn.commit()
@@ -306,6 +322,18 @@ class Database:
                JOIN (SELECT MAX(trade_date) AS d FROM agent_logs) t ON a.trade_date = t.d
                ORDER BY a.fund_code, a.agent""",
         )
+
+    # ---- 运行日志（心跳）----
+    def log_run(self, status: str, trade_date: str | None = None,
+                ok_count: int = 0, fail_count: int = 0, detail: str = "") -> None:
+        """记录一次流水线触发（含跳过/失败）——看门狗的心跳来源。"""
+        self.execute(
+            "INSERT INTO pipeline_runs (run_date, trade_date, status, ok_count, fail_count, detail) "
+            "VALUES (?,?,?,?,?,?)",
+            (date.today().isoformat(), trade_date, status, ok_count, fail_count, detail))
+
+    def last_run(self) -> sqlite3.Row | None:
+        return (self.query("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1") or [None])[0]
 
 
 def get_db(config: AppConfig) -> Database:

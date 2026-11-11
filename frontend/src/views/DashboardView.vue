@@ -4,13 +4,14 @@ import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import { usePanelStore } from '@/stores/panel'
 import { useChart } from '@/composables/useChart'
-import type { Overview, LedgerResponse } from '@/api/types'
+import type { Overview, LedgerResponse, RuntimeStatus } from '@/api/types'
 import type { EChartsOption } from 'echarts'
 
 const router = useRouter()
 const store = usePanelStore()
 
 const overview = ref<Overview | null>(null)
+const runtime = ref<RuntimeStatus | null>(null)
 const ledger = ref<LedgerResponse>({ rows: [], summary: { market_value: 0, daily_pnl: 0, pnl: 0, cost_total: 0, pnl_pct: null } })
 const quickCode = ref('')
 
@@ -33,13 +34,30 @@ const donutOption = computed<EChartsOption | null>(() => {
   }
 })
 
+const RUN_STATUS_LABEL: Record<string, { label: string; ok: boolean }> = {
+  ok: { label: '成功', ok: true },
+  partial: { label: '部分失败', ok: false },
+  failed: { label: '失败', ok: false },
+  skipped_non_trading_day: { label: '非交易日跳过', ok: true },
+  already_done: { label: '当日已完成', ok: true },
+}
+
 const healthRows = computed(() => {
   const s = stats.value
   if (!s) return []
+  const rt = runtime.value
+  const last = rt?.last_run
+  const lastLabel = last
+    ? `${last.finished_at.slice(5, 16)} · ${RUN_STATUS_LABEL[last.status]?.label ?? last.status}`
+    : '从未运行'
+  const backup = rt?.latest_backup
   return [
     { name: '净值数据最新日期', value: s.nav_latest ?? '—', ok: !!s.nav_latest },
     { name: '新闻数据最新时间', value: s.news_latest ?? '—', ok: !!s.news_latest },
-    { name: '每日定时调度', value: s.scheduler_enabled ? '已启用' : '手动触发', ok: s.scheduler_enabled },
+    { name: '每日定时调度', value: s.scheduler_enabled ? `已启用 · ${rt?.scheduler.run_at ?? ''}` : '手动触发', ok: s.scheduler_enabled },
+    { name: '下次自动运行', value: rt?.next_run ? rt.next_run.slice(5, 16) : '—', ok: !!rt?.next_run },
+    { name: '最近流水线运行', value: lastLabel, ok: !!last && (RUN_STATUS_LABEL[last.status]?.ok ?? false) },
+    { name: '数据备份', value: backup ? `${backup.date} · ${(backup.size_bytes / 1024).toFixed(0)}KB` : '无备份', ok: !!backup },
     { name: '信号告警推送', value: s.notifications_enabled ? '已启用' : '未配置', ok: s.notifications_enabled },
   ]
 })
@@ -55,6 +73,7 @@ async function quickRun(): Promise<void> {
 
 onMounted(async () => {
   api.overview().then((o) => { overview.value = o }).catch(() => {})
+  api.runtime().then((r) => { runtime.value = r }).catch(() => {})
   api.ledger().then((l) => { ledger.value = { rows: l.rows, summary: l.summary } }).catch(() => {})
   if (!store.signals.length) void store.loadAll()
 })
@@ -150,7 +169,7 @@ onMounted(async () => {
       </el-card>
 
       <el-card shadow="never" class="grow">
-        <template #header><div class="card-title">数据健康</div></template>
+        <template #header><div class="card-title">运行健康</div></template>
         <div class="health">
           <div v-for="h in healthRows" :key="h.name" class="health-row">
             <span class="text-muted">{{ h.name }}</span>

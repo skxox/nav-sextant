@@ -279,6 +279,7 @@ class Pipeline:
         today = date.today()
         if not is_trading_day(today):
             logger.info("%s 非交易日，跳过流水线", today)
+            self.db.log_run("skipped_non_trading_day")  # 跳过也是心跳：证明调度活着
             return []
         trade_date = last_trading_day(today).strftime("%Y-%m-%d")
 
@@ -286,6 +287,7 @@ class Pipeline:
             existing = self.db.query("SELECT COUNT(*) AS n FROM signals WHERE trade_date=?", (trade_date,))
             if existing[0]["n"] >= len(self.config.funds):
                 logger.info("%s 信号已存在，跳过（force=True 可强制重跑）", trade_date)
+                self.db.log_run("already_done", trade_date=trade_date)
                 return self._existing_signals(trade_date)
 
         logger.info("流水线开始：%s（LLM=%s, model=%s）", trade_date,
@@ -303,6 +305,16 @@ class Pipeline:
         self.notifier.send(
             [s for s in results if s.action in ("BUY", "SELL") or not s.risk_passed],
             ctx=self._action_context())
+        # 失败的基金在循环里被捕获且不入 results：ok = 成功数，fail = 余数
+        ok = len(results)
+        fails = len(self.config.funds) - ok
+        status = "ok" if fails == 0 else ("failed" if ok == 0 else "partial")
+        self.db.log_run(status, trade_date=trade_date, ok_count=ok, fail_count=fails)
+        try:
+            from .backup import backup_database
+            backup_database(self.db, self.config.scheduler.backup_keep_days)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("数据库备份失败: %s", e)
         logger.info("流水线完成：%d 只基金", len(results))
         return results
 

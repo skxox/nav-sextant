@@ -402,6 +402,27 @@ export interface OverviewStats {
   scheduler_enabled: boolean
 }
 
+// ---------- 运行保障 ----------
+
+export interface PipelineRunInfo {
+  id: number
+  run_date: string
+  trade_date: string | null
+  status: string
+  ok_count: number
+  fail_count: number
+  detail: string
+  finished_at: string
+}
+
+export interface RuntimeStatus {
+  scheduler: { enabled: boolean; run_at: string; weekdays_only: boolean }
+  next_run: string | null
+  notifications_active: boolean
+  last_run: PipelineRunInfo | null
+  latest_backup: { file: string; size_bytes: number; date: string } | null
+}
+
 export interface Overview {
   indices: MarketIndex[]
   stats: OverviewStats
@@ -450,6 +471,7 @@ export interface SchedulerSettings {
   enabled: boolean
   run_at: string
   weekdays_only: boolean
+  backup_keep_days?: number
 }
 
 export interface NotificationSettings {

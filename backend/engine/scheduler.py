@@ -53,6 +53,13 @@ class DailyScheduler:
             self._scheduler = None
             logger.info("内置调度器已停止")
 
+    def next_run(self) -> str | None:
+        """下一次计划触发时间（ISO），未启用或未运行返回 None。"""
+        if self._scheduler is None:
+            return None
+        job = self._scheduler.get_job("daily-pipeline")
+        return job.next_run_time.isoformat() if job and job.next_run_time else None
+
     def _run_job(self) -> None:
         logger.info("定时任务触发：%s", datetime.now().strftime("%Y-%m-%d %H:%M"))
         try:

@@ -139,6 +139,8 @@ class SchedulerSettings(BaseModel):
     enabled: bool = False
     run_at: str = Field(default="18:00", pattern=r"^\d{2}:\d{2}$")
     weekdays_only: bool = True
+    # 流水线跑完后的数据库备份保留天数（backups/sextant-日期.db.gz），0 = 关闭
+    backup_keep_days: int = Field(default=30, ge=0, le=365)
 
 
 class NotificationSettings(BaseModel):

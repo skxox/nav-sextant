@@ -18,7 +18,7 @@ const strategy = reactive({
   whipsaw_days: 3, min_trade: 0.05,
 })
 const debate = reactive({ rounds: 2, consensus_early_stop: true })
-const scheduler = reactive({ enabled: false, run_at: '18:00', weekdays_only: true })
+const scheduler = reactive({ enabled: false, run_at: '18:00', weekdays_only: true, backup_keep_days: 30 })
 const notifications = reactive({ enabled: false, feishu_webhook: '', wecom_webhook: '', email_to: '' as string | string[], smtp_host: '', smtp_port: 465, smtp_user: '', email_from: '' })
 const backtestCfg = reactive({ buy_cost: 0.0015, sell_cost: 0.005, risk_free_rate: 0.02 })
 
@@ -258,6 +258,8 @@ onMounted(load)
           <el-input-number v-model="debate.rounds" :min="1" :max="4" style="width: 100%" /></div>
         <div class="field"><label>每日运行时间</label>
           <el-time-select v-model="scheduler.run_at" start="00:00" step="00:30" end="23:30" style="width: 100%" /></div>
+        <div class="field"><label>数据库备份保留天数（0=关闭，每日运行后归档）</label>
+          <el-input-number v-model="scheduler.backup_keep_days" :min="0" :max="365" style="width: 100%" /></div>
         <div class="field"><label>SMTP 端口</label>
           <el-input-number v-model="notifications.smtp_port" :min="1" :max="65535" style="width: 100%" /></div>
         <div class="field"><label>飞书 Webhook</label>
